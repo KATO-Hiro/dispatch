@@ -16,7 +16,7 @@ from .service import create, delete, get, update
 router = APIRouter()
 
 
-@router.get("/", response_model=TagPagination)
+@router.get("", response_model=TagPagination)
 def get_tags(*, common: dict = Depends(common_parameters)):
     """
     Get all tags, or only those matching a given search term.
@@ -35,7 +35,7 @@ def get_tag(*, db_session: Session = Depends(get_db), tag_id: str):
     return tag
 
 
-@router.post("/", response_model=TagRead)
+@router.post("", response_model=TagRead)
 def create_tag(*, db_session: Session = Depends(get_db), tag_in: TagCreate):
     """
     Create a new tag.
@@ -74,11 +74,15 @@ def get_tag_recommendations(*, db_session: Session = Depends(get_db), model_name
     """
     model_object = get_class_by_tablename(model_name)
     model = db_session.query(model_object).filter(model_object.id == id).one_or_none()
+    project_slug = model.project.slug
+    organization_slug = model.project.organization.slug
 
     if not model:
         raise HTTPException(
             status_code=404, detail=f"No model found. ModelName: {model_name} Id: {id}"
         )
 
-    tags = get_recommendations(db_session, [t.id for t in model.tags], model_name)
+    tags = get_recommendations(
+        db_session, [t.id for t in model.tags], organization_slug, project_slug, model_name
+    )
     return {"items": tags, "total": len(tags)}

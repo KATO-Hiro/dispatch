@@ -1,14 +1,16 @@
 <template>
   <v-combobox
-    v-model="definitions"
     :items="items"
+    :loading="loading"
     :search-input.sync="search"
+    @update:search-input="getFilteredData()"
+    chips
+    deletable-chips
     hide-selected
     label="Add definitions"
     multiple
-    chips
-    :loading="loading"
-    @update:search-input="getFilteredData()"
+    no-filter
+    v-model="definitions"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -18,6 +20,13 @@
             <strong>{{ search }}</strong
             >". Press <kbd>enter</kbd> to create a new one
           </v-list-item-title>
+        </v-list-item-content>
+      </v-list-item>
+    </template>
+    <template v-slot:append-item>
+      <v-list-item v-if="more" @click="loadMore()">
+        <v-list-item-content>
+          <v-list-item-subtitle> Load More </v-list-item-subtitle>
         </v-list-item-content>
       </v-list-item>
     </template>
@@ -49,6 +58,8 @@ export default {
     return {
       loading: false,
       items: [],
+      more: false,
+      numItems: 5,
       search: null,
     }
   },
@@ -79,6 +90,10 @@ export default {
   },
 
   methods: {
+    loadMore() {
+      this.numItems = this.numItems + 5
+      this.fetchData()
+    },
     fetchData() {
       this.error = null
       this.loading = "error"
@@ -94,6 +109,14 @@ export default {
 
       DefinitionApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
+        this.total = response.data.total
+
+        if (this.items.length < this.total) {
+          this.more = true
+        } else {
+          this.more = false
+        }
+
         this.loading = false
       })
     },

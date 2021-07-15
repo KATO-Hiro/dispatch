@@ -1,12 +1,18 @@
 from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy.orm import Session
-from dispatch.auth.permissions import OrganizationOwnerPermission, PermissionsDependency
+from dispatch.auth.permissions import (
+    OrganizationOwnerPermission,
+    OrganizationMemberPermission,
+    PermissionsDependency,
+)
 
 from dispatch.database.core import get_db
 from dispatch.database.service import common_parameters, search_filter_sort_paginate
+from dispatch.organization.models import OrganizationRead
 
 from .models import (
     UserLogin,
+    UserOrganization,
     UserRegister,
     UserRead,
     UserUpdate,
@@ -21,12 +27,41 @@ auth_router = APIRouter()
 user_router = APIRouter()
 
 
-@user_router.get("/", response_model=UserPagination)
-def get_users(*, common: dict = Depends(common_parameters)):
+@user_router.get(
+    "",
+    dependencies=[
+        Depends(
+            PermissionsDependency(
+                [
+                    OrganizationMemberPermission,
+                ]
+            )
+        )
+    ],
+    response_model=UserPagination,
+)
+def get_users(*, organization: str, common: dict = Depends(common_parameters)):
     """
     Get all users.
     """
-    return search_filter_sort_paginate(model="DispatchUser", **common)
+    common["filter_spec"] = {
+        "and": [{"model": "Organization", "op": "==", "field": "name", "value": organization}]
+    }
+    items = search_filter_sort_paginate(model="DispatchUser", **common)
+
+    # filtered users
+    return {
+        "total": items["total"],
+        "items": [
+            {
+                "id": u.id,
+                "email": u.email,
+                "projects": u.projects,
+                "role": u.get_organization_role(organization),
+            }
+            for u in items["items"]
+        ],
+    }
 
 
 @user_router.get("/{user_id}", response_model=UserRead)
@@ -37,6 +72,7 @@ def get_user(*, db_session: Session = Depends(get_db), user_id: int):
     user = get(db_session=db_session, user_id=user_id)
     if not user:
         raise HTTPException(status_code=404, detail="The user with this id does not exist.")
+
     return user
 
 
@@ -45,7 +81,7 @@ def get_me(
     req: Request,
     db_session: Session = Depends(get_db),
 ):
-    return get_current_user(db_session=db_session, request=req)
+    return get_current_user(request=req)
 
 
 @user_router.put(
@@ -57,6 +93,7 @@ def update_user(
     *,
     db_session: Session = Depends(get_db),
     user_id: int,
+    organization: str,
     user_in: UserUpdate,
 ):
     """
@@ -66,9 +103,12 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="The user with this id does not exist.")
 
-    user = update(db_session=db_session, user=user, user_in=user_in)
+    # add organization information
+    user_in.organizations = [
+        UserOrganization(role=user_in.role, organization=OrganizationRead(name=organization))
+    ]
 
-    return user
+    return update(db_session=db_session, user=user, user_in=user_in)
 
 
 @auth_router.post("/login", response_model=UserLoginResponse)
@@ -85,11 +125,12 @@ def login_user(
 @auth_router.post("/register", response_model=UserRegisterResponse)
 def register_user(
     user_in: UserRegister,
+    organization: str,
     db_session: Session = Depends(get_db),
 ):
     user = get_by_email(db_session=db_session, email=user_in.email)
     if not user:
-        user = create(db_session=db_session, user_in=user_in)
+        user = create(db_session=db_session, organization=organization, user_in=user_in)
     else:
         raise HTTPException(status_code=400, detail="User with that email address exists.")
 

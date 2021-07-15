@@ -11,9 +11,9 @@ from sqlalchemy_utils import TSVectorType
 
 from dispatch.database.core import Base
 from dispatch.document.models import DocumentCreate
-from dispatch.models import DispatchBase, ResourceMixin, TimeStampMixin, ProjectMixin
+from dispatch.models import DispatchBase, ResourceBase, ResourceMixin, TimeStampMixin, ProjectMixin
 from dispatch.participant.models import ParticipantRead
-from dispatch.plugin.models import PluginRead
+from dispatch.plugin.models import PluginInstance, PluginInstanceRead
 from dispatch.project.models import ProjectRead
 
 
@@ -23,6 +23,9 @@ class WorkflowInstanceStatus(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+
+    def __str__(self) -> str:
+        return str.__str__(self)
 
 
 # Association tables for many to many relationships
@@ -66,7 +69,8 @@ class Workflow(Base, ProjectMixin, TimeStampMixin):
     enabled = Column(Boolean, default=True)
     parameters = Column(JSON, default=[])
     resource_id = Column(String)
-    plugin_id = Column(Integer, ForeignKey("plugin.id"))
+    plugin_instance_id = Column(Integer, ForeignKey(PluginInstance.id))
+    plugin_instance = relationship(PluginInstance, backref="workflows")
     instances = relationship("WorkflowInstance", backref="workflow")
     incident_priorities = relationship(
         "IncidentPriority", secondary=assoc_workflow_incident_priorities, backref="workflows"
@@ -102,7 +106,7 @@ class WorkflowInstance(Base, ResourceMixin):
 class WorkflowBase(DispatchBase):
     name: str
     resource_id: str
-    plugin: Optional[PluginRead]
+    plugin_instance: Optional[PluginInstanceRead]
     parameters: Optional[List[dict]] = []
     enabled: Optional[bool]
     description: Optional[str]
@@ -138,22 +142,19 @@ class WorkflowPagination(DispatchBase):
     items: List[WorkflowRead] = []
 
 
-class WorkflowInstanceBase(DispatchBase):
-    resource_type: Optional[str]
-    resource_id: Optional[str]
-    weblink: Optional[str]
-    status: Optional[WorkflowInstanceStatus]
-    parameters: Optional[List[dict]] = []
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    run_reason: Optional[str]
+class WorkflowInstanceBase(ResourceBase):
     artifacts: Optional[List[DocumentCreate]] = []
+    created_at: Optional[datetime] = None
+    parameters: Optional[List[dict]] = []
+    run_reason: Optional[str]
+    status: Optional[WorkflowInstanceStatus]
+    updated_at: Optional[datetime] = None
 
 
 class WorkflowInstanceCreate(WorkflowInstanceBase):
-    workflow: dict  # TODO define a required ID
-    incident: dict  # TODO define a required ID
     creator: dict  # TODO define a required email
+    incident: dict  # TODO define a required ID
+    workflow: dict  # TODO define a required ID
 
 
 class WorkflowInstanceUpdate(WorkflowInstanceBase):

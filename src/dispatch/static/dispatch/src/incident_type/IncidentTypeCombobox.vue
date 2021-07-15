@@ -1,16 +1,18 @@
 <template>
   <v-combobox
-    v-model="incidentType"
     :items="items"
-    item-text="name"
-    :search-input.sync="search"
-    hide-selected
     :label="label"
-    multiple
+    :loading="loading"
+    :search-input.sync="search"
+    @update:search-input="getFilteredData()"
     chips
     clearable
-    :loading="loading"
-    @update:search-input="getFilteredData()"
+    deletable-chips
+    hide-selected
+    item-text="name"
+    multiple
+    no-filter
+    v-model="incidentType"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -23,11 +25,18 @@
         </v-list-item-content>
       </v-list-item>
     </template>
+    <template v-slot:selection="{ item, index }">
+      <v-chip close @click:close="value.splice(index, 1)">
+        <span v-if="item.project"> {{ item.project.name }}/ </span>{{ item.name }}
+      </v-chip>
+    </template>
     <template v-slot:item="data">
       <template>
         <v-list-item-content>
-          <v-list-item-title v-text="data.item.name" />
-          <v-list-item-subtitle v-text="data.item.description" />
+          <v-list-item-title> {{ data.item.project.name }}/{{ data.item.name }} </v-list-item-title>
+          <v-list-item-subtitle style="width: 200px" class="text-truncate">
+            {{ data.item.description }}
+          </v-list-item-subtitle>
         </v-list-item-content>
       </template>
     </template>
@@ -100,13 +109,13 @@ export default {
   },
 
   created() {
-    this.fetchData({})
+    this.fetchData()
   },
 
   methods: {
     loadMore() {
       this.numItems = this.numItems + 5
-      this.getFilteredData()
+      this.fetchData()
     },
     fetchData() {
       this.error = null
@@ -125,11 +134,25 @@ export default {
             project: [this.project],
           },
         }
-        filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions })
       }
+
+      let enabledFilter = [
+        {
+          model: "IncidentType",
+          field: "enabled",
+          op: "==",
+          value: "true",
+        },
+      ]
+
+      filterOptions = SearchUtils.createParametersFromTableOptions(
+        { ...filterOptions },
+        enabledFilter
+      )
 
       IncidentTypeApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
+        this.total = response.data.total
         this.loading = false
 
         if (this.items.length < this.total) {
@@ -137,7 +160,6 @@ export default {
         } else {
           this.more = false
         }
-
         this.loading = false
       })
     },

@@ -106,16 +106,23 @@
               </v-flex>
               <v-flex xs12>
                 <v-checkbox
+                  v-model="page_commander"
+                  label="Page Commander"
+                  hint="Would you like Dispatch to page the incident commander on incident creation?"
+                />
+              </v-flex>
+              <v-flex xs12>
+                <v-checkbox
                   v-model="default_incident_priority"
                   label="Default Incident Priority"
                   hint="Check if this incident priority should be the default."
                 />
               </v-flex>
-              <v-flex>
+              <v-flex xs12>
                 <v-checkbox
-                  v-model="page_commander"
-                  label="Page Commander"
-                  hint="Would you like Dispatch to page the incident commander on incident creation?"
+                  v-model="enabled"
+                  label="Enabled"
+                  hint="Determines whether this incident priority is availible for new incidents."
                 />
               </v-flex>
             </v-layout>
@@ -158,6 +165,7 @@ export default {
       "selected.loading",
       "selected.name",
       "selected.view_order",
+      "selected.enabled",
       "selected.page_commander",
       "selected.tactical_report_reminder",
       "selected.executive_report_reminder",

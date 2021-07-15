@@ -11,10 +11,7 @@ from dispatch.conversation.enums import ConversationCommands
 from dispatch.database.core import SessionLocal, resolve_attr
 from dispatch.document import service as document_service
 from dispatch.incident.enums import IncidentStatus
-from dispatch.project.models import Project
 from dispatch.incident.models import Incident, IncidentRead
-from dispatch.incident_priority.models import IncidentPriority
-from dispatch.incident_type.models import IncidentType
 
 from dispatch.notification import service as notification_service
 from dispatch.messaging.strings import (
@@ -28,6 +25,7 @@ from dispatch.messaging.strings import (
     INCIDENT_NEW_ROLE_NOTIFICATION,
     INCIDENT_NOTIFICATION,
     INCIDENT_NOTIFICATION_COMMON,
+    INCIDENT_OPEN_TASKS,
     INCIDENT_PARTICIPANT_SUGGESTED_READING_ITEM,
     INCIDENT_PARTICIPANT_WELCOME_MESSAGE,
     INCIDENT_PRIORITY_CHANGE,
@@ -46,22 +44,22 @@ from dispatch.plugin import service as plugin_service
 log = logging.getLogger(__name__)
 
 
-def get_suggested_documents(
-    db_session,
-    project: Project,
-    incident_type: IncidentType,
-    incident_priority: IncidentPriority,
-    description: str,
-) -> list:
+def get_suggested_documents(db_session, incident: Incident) -> list:
     """Get additional incident documents based on priority, type, and description."""
     plugin = plugin_service.get_active_instance(
-        db_session=db_session, project_id=project.id, plugin_type="document-resolver"
+        db_session=db_session, project_id=incident.project.id, plugin_type="document-resolver"
     )
+
     documents = []
     if plugin:
-        documents = plugin.instance.get(
-            incident_type, incident_priority, description, project, db_session=db_session
-        )
+        matches = plugin.instance.get(incident=incident, db_session=db_session)
+
+        for m in matches:
+            document = document_service.get(
+                db_session=db_session, document_id=m.resource_state["id"]
+            )
+            documents.append(document)
+
     return documents
 
 
@@ -100,12 +98,14 @@ def send_welcome_ephemeral_message_to_participant(
         "conference_challenge": resolve_attr(incident, "conference.conference_challenge"),
     }
 
-    faq_doc = document_service.get_incident_faq_document(db_session=db_session)
+    faq_doc = document_service.get_incident_faq_document(
+        db_session=db_session, project_id=incident.project_id
+    )
     if faq_doc:
         message_kwargs.update({"faq_weblink": faq_doc.weblink})
 
     conversation_reference = document_service.get_conversation_reference_document(
-        db_session=db_session
+        db_session=db_session, project_id=incident.project_id
     )
     if conversation_reference:
         message_kwargs.update(
@@ -160,12 +160,14 @@ def send_welcome_email_to_participant(
         "contact_weblink": incident.commander.individual.weblink,
     }
 
-    faq_doc = document_service.get_incident_faq_document(db_session=db_session)
+    faq_doc = document_service.get_incident_faq_document(
+        db_session=db_session, project_id=incident.project_id
+    )
     if faq_doc:
         message_kwargs.update({"faq_weblink": faq_doc.weblink})
 
     conversation_reference = document_service.get_conversation_reference_document(
-        db_session=db_session
+        db_session=db_session, project_id=incident.project_id
     )
     if conversation_reference:
         message_kwargs.update(
@@ -199,13 +201,7 @@ def send_incident_welcome_participant_messages(
 
 def get_suggested_document_items(incident: Incident, db_session: SessionLocal):
     """Create the suggested document item message."""
-    suggested_documents = get_suggested_documents(
-        db_session,
-        incident.project,
-        incident.incident_type,
-        incident.incident_priority,
-        incident.description,
-    )
+    suggested_documents = get_suggested_documents(db_session, incident)
 
     items = []
     if suggested_documents:
@@ -277,9 +273,12 @@ def send_incident_created_notifications(incident: Incident, db_session: SessionL
         "contact_fullname": incident.commander.individual.name,
         "contact_weblink": incident.commander.individual.weblink,
         "incident_id": incident.id,
+        "organization_slug": incident.project.organization.slug,
     }
 
-    faq_doc = document_service.get_incident_faq_document(db_session=db_session)
+    faq_doc = document_service.get_incident_faq_document(
+        db_session=db_session, project_id=incident.project_id
+    )
     if faq_doc:
         notification_kwargs.update({"faq_weblink": faq_doc.weblink})
 
@@ -348,7 +347,7 @@ def send_incident_update_notifications(
                 incident_priority_new=incident.incident_priority.name,
                 incident_priority_old=previous_incident.incident_priority.name,
                 incident_status_new=incident.status,
-                incident_status_old=previous_incident.status.value,
+                incident_status_old=previous_incident.status,
                 incident_type_new=incident.incident_type.name,
                 incident_type_old=previous_incident.incident_type.name,
                 name=incident.name,
@@ -377,9 +376,10 @@ def send_incident_update_notifications(
         "incident_priority_new": incident.incident_priority.name,
         "incident_priority_old": previous_incident.incident_priority.name,
         "incident_status_new": incident.status,
-        "incident_status_old": previous_incident.status.value,
+        "incident_status_old": previous_incident.status,
         "incident_type_new": incident.incident_type.name,
         "incident_type_old": previous_incident.incident_type.name,
+        "organization_slug": incident.project.organization.slug,
         "name": incident.name,
         "ticket_weblink": resolve_attr(incident, "ticket.weblink"),
         "title": incident.title,
@@ -410,7 +410,9 @@ def send_incident_participant_announcement_message(
         db_session=db_session, project_id=incident.project.id, plugin_type="conversation"
     )
     if not convo_plugin:
-        log.warning("Incident participant annoucement not sent, no conversation plugin enabled.")
+        log.warning(
+            "Incident participant announcement message not sent. No conversation plugin enabled."
+        )
         return
 
     notification_text = "New Incident Participant"
@@ -672,12 +674,14 @@ def send_incident_resources_ephemeral_message_to_participant(
             {"review_document_weblink": incident.incident_review_document.weblink}
         )
 
-    faq_doc = document_service.get_incident_faq_document(db_session=db_session)
+    faq_doc = document_service.get_incident_faq_document(
+        db_session=db_session, project_id=incident.project_id
+    )
     if faq_doc:
         message_kwargs.update({"faq_weblink": faq_doc.weblink})
 
     conversation_reference = document_service.get_conversation_reference_document(
-        db_session=db_session
+        db_session=db_session, project_id=incident.project_id
     )
     if conversation_reference:
         message_kwargs.update(
@@ -794,6 +798,7 @@ def send_incident_rating_feedback_message(incident: Incident, db_session: Sessio
     items = [
         {
             "incident_id": incident.id,
+            "organization_slug": incident.project.organization.slug,
             "name": incident.name,
             "title": incident.title,
             "ticket_weblink": incident.ticket.weblink,
@@ -860,3 +865,37 @@ def send_incident_management_help_tips_message(incident: Incident, db_session: S
     log.debug(
         f"Incident management help tips message sent to incident commander with email {incident.commander.individual.email}."
     )
+
+
+def send_incident_open_tasks_ephemeral_message(
+    participant_email: str, incident: Incident, db_session: SessionLocal
+):
+    """
+    Sends an ephemeral message to the participant asking them to resolve or re-assign
+    their open tasks before leaving the incident.
+    """
+    convo_plugin = plugin_service.get_active_instance(
+        db_session=db_session, project_id=incident.project.id, plugin_type="conversation"
+    )
+    if not convo_plugin:
+        log.warning("Incident open tasks message not sent. No conversation plugin enabled.")
+        return
+
+    notification_text = "Open Incident Tasks"
+    message_type = MessageType.incident_open_tasks
+    message_template = INCIDENT_OPEN_TASKS
+    message_kwargs = {
+        "title": notification_text,
+        "dispatch_ui_url": f"{DISPATCH_UI_URL}/{incident.project.organization.name}/tasks",
+    }
+
+    convo_plugin.instance.send_ephemeral(
+        incident.conversation.channel_id,
+        participant_email,
+        notification_text,
+        message_template,
+        message_type,
+        **message_kwargs,
+    )
+
+    log.debug(f"Open incident tasks message sent to {participant_email}.")

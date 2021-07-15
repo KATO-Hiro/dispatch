@@ -2,7 +2,7 @@ import logging
 
 from datetime import date
 
-from dispatch.config import INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT
+from dispatch.enums import DocumentResourceTemplateTypes
 from dispatch.decorators import background_task
 from dispatch.document import service as document_service
 from dispatch.document.models import DocumentCreate
@@ -27,7 +27,10 @@ log = logging.getLogger(__name__)
 
 @background_task
 def create_tactical_report(
-    user_email: str, incident_id: int, tactical_report_in: TacticalReportCreate, db_session=None
+    user_email: str,
+    incident_id: int,
+    tactical_report_in: TacticalReportCreate,
+    db_session=None,
 ):
     """Creates and sends a new tactical report to a conversation."""
     conditions = tactical_report_in.conditions
@@ -78,10 +81,10 @@ def create_executive_report(
     user_email: str,
     incident_id: int,
     executive_report_in: ExecutiveReportCreate,
+    organization_slug: str = None,
     db_session=None,
 ):
     """Creates an executive report."""
-    report_template = document_service.get_executive_report_template(db_session=db_session)
 
     current_date = date.today().strftime("%B %d, %Y")
 
@@ -92,7 +95,7 @@ def create_executive_report(
     # we load the incident instance
     incident = incident_service.get(db_session=db_session, incident_id=incident_id)
 
-    if not report_template:
+    if not incident.incident_type.executive_template_document:
         raise InvalidConfiguration("No executive report template defined.")
 
     # we fetch all previous executive reports
@@ -143,14 +146,14 @@ def create_executive_report(
     executive_report_document_name = f"{incident.name} - Executive Report - {current_date}"
     executive_report_document = storage_plugin.instance.copy_file(
         folder_id=incident.storage.resource_id,
-        file_id=report_template.resource_id,
+        file_id=incident.incident_type.executive_template_document.resource_id,
         name=executive_report_document_name,
     )
 
     executive_report_document.update(
         {
             "name": executive_report_document_name,
-            "resource_type": INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT,
+            "resource_type": DocumentResourceTemplateTypes.executive,
         }
     )
 

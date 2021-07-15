@@ -1,8 +1,9 @@
 <template>
   <v-app>
-    <v-content>
+    <v-main>
+      <organization-banner />
       <v-app-bar app flat class="v-bar--underline" color="background0">
-        <router-link to="/" style="text-decoration: none">
+        <router-link :to="{ name: 'IncidentOverview' }" style="text-decoration: none">
           <span class="button font-weight-bold">D I S P A T C H</span>
         </router-link>
         <v-spacer />
@@ -13,19 +14,21 @@
           <incident-summary-table :items="items" :loading="loading" />
         </v-card-text>
       </v-card>
-    </v-content>
+    </v-main>
   </v-app>
 </template>
 
 <script>
 import IncidentApi from "@/incident/api"
 import IncidentSummaryTable from "@/incident/IncidentSummaryTable.vue"
+import OrganizationBanner from "@/organization/OrganizationBanner.vue"
 
 export default {
   name: "IncidentStatus",
 
   components: {
     IncidentSummaryTable,
+    OrganizationBanner,
   },
 
   data() {
@@ -46,6 +49,7 @@ export default {
         filter: JSON.stringify({
           and: [
             {
+              model: "Incident",
               field: "status",
               op: "==",
               value: "Active",

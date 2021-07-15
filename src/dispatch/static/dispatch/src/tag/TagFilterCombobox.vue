@@ -1,17 +1,17 @@
 <template>
   <v-combobox
-    v-model="tags"
     :items="items"
-    item-text="name"
-    :search-input.sync="search"
-    hide-selected
     :label="label"
-    multiple
-    clearable
-    chips
     :loading="loading"
+    :search-input.sync="search"
+    @update:search-input="getFilteredData()"
+    chips
+    clearable
+    hide-selected
+    item-text="name"
+    multiple
     no-filter
-    @update:search-input="getFilteredData({ q: $event })"
+    v-model="tags"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -24,16 +24,24 @@
         </v-list-item-content>
       </v-list-item>
     </template>
-    <template v-slot:selection="data">
-      <v-chip> {{ data.item.tag_type.name }}/{{ data.item.name }} </v-chip>
+    <template v-slot:selection="{ item, index }">
+      <v-chip close @click:close="value.splice(index, 1)">
+        <span v-if="item.tag_type"
+          ><span v-if="!project">{{ item.project.name }}/</span>{{ item.tag_type.name }}/ </span
+        >{{ item.name }}
+      </v-chip>
     </template>
     <template v-slot:item="data">
-      <template>
-        <v-list-item-content>
-          <v-list-item-title v-text="data.item.name" />
-          <v-list-item-subtitle v-if="data.item.tag_type" v-text="data.item.tag_type.name" />
-        </v-list-item-content>
-      </template>
+      <v-list-item-content>
+        <v-list-item-title>
+          <span v-if="!project">{{ data.item.project.name }}/</span>{{ data.item.tag_type.name }}/{{
+            data.item.name
+          }}
+        </v-list-item-title>
+        <v-list-item-subtitle style="width: 200px" class="text-truncate">
+          {{ data.item.description }}
+        </v-list-item-subtitle>
+      </v-list-item-content>
     </template>
     <template v-slot:append-item>
       <v-list-item v-if="more" @click="loadMore()">
@@ -109,11 +117,11 @@ export default {
   },
 
   created() {
-    this.fetchData({})
+    this.fetchData()
     this.$watch(
       (vm) => [vm.project],
       () => {
-        this.fetchData({})
+        this.fetchData()
       }
     )
   },
@@ -121,14 +129,14 @@ export default {
   methods: {
     loadMore() {
       this.numItems = this.numItems + 5
-      this.getFilteredData({ q: this.search, itemsPerPage: this.numItems })
+      this.fetchData()
     },
-    fetchData(filterOptions) {
+    fetchData() {
       this.error = null
       this.loading = "error"
 
       // fetch recommendations model and ID are provided
-      if (!filterOptions.q) {
+      if (!this.search) {
         if (this.model && this.modelId) {
           TagApi.getRecommendations(this.model, this.modelId).then((response) => {
             this.items = response.data.items
@@ -139,6 +147,11 @@ export default {
           })
           return
         }
+      }
+
+      let filterOptions = {
+        q: this.search,
+        itemsPerPage: this.numItems,
       }
 
       if (this.project) {
@@ -177,8 +190,8 @@ export default {
         this.loading = false
       })
     },
-    getFilteredData: debounce(function (options) {
-      this.fetchData(options)
+    getFilteredData: debounce(function () {
+      this.fetchData()
     }, 500),
   },
 }

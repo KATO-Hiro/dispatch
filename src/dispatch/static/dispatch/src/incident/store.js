@@ -83,6 +83,11 @@ const state = {
         status: [],
         tag: [],
         project: [],
+        tag_type: [],
+        reported_at: {
+          start: null,
+          end: null,
+        },
       },
       q: "",
       page: 1,
@@ -115,7 +120,7 @@ const actions = {
       .catch(() => {
         commit("SET_TABLE_LOADING", false)
       })
-  }, 200),
+  }, 500),
   get({ commit, state }) {
     return IncidentApi.get(state.selected.id).then((response) => {
       commit("SET_SELECTED", response.data)
@@ -244,7 +249,7 @@ const actions = {
           commit(
             "notification_backend/addBeNotification",
             {
-              text: "Incident not updated. Reason: " + err.response.data.detail,
+              text: "Incident not created. Reason: " + err.response.data.detail,
               type: "error",
             },
             { root: true }

@@ -20,23 +20,27 @@ def get_by_name(*, db_session, project_id: int, name: str) -> Optional[Tag]:
     )
 
 
-def get_all(*, db_session):
-    return db_session.query(Tag)
+def get_all(*, db_session, project_id: int):
+    return db_session.query(Tag).filter(Tag.project_id == project_id)
 
 
 def create(*, db_session, tag_in: TagCreate) -> Tag:
     project = project_service.get_by_name(db_session=db_session, name=tag_in.project.name)
-    tag_type = tag_type_service.get_by_name(
-        db_session=db_session, project_id=project.id, name=tag_in.tag_type.name
-    )
+    tag_type = tag_type_service.get_or_create(db_session=db_session, tag_type_in=tag_in.tag_type)
     tag = Tag(**tag_in.dict(exclude={"tag_type", "project"}), project=project, tag_type=tag_type)
+    tag.tag_type = tag_type
+    tag.project = project
     db_session.add(tag)
     db_session.commit()
     return tag
 
 
 def get_or_create(*, db_session, tag_in: TagCreate) -> Tag:
-    q = db_session.query(Tag).filter_by(name=tag_in.name)
+    # prefer the  ID if available
+    if tag_in.id:
+        q = db_session.query(Tag).filter(Tag.id == tag_in.id)
+    else:
+        q = db_session.query(Tag).filter_by(name=tag_in.name)
 
     instance = q.first()
     if instance:

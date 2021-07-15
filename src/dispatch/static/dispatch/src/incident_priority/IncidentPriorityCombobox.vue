@@ -1,17 +1,18 @@
 <template>
   <v-combobox
-    v-model="incidentPriority"
     :items="items"
-    item-text="name"
-    :search-input.sync="search"
-    :menu-props="{ maxHeight: '400' }"
-    hide-selected
     :label="label"
-    multiple
+    :loading="loading"
+    :search-input.sync="search"
+    @update:search-input="getFilteredData()"
     chips
     clearable
-    :loading="loading"
-    @update:search-input="getFilteredData()"
+    deletable-chips
+    hide-selected
+    item-text="id"
+    multiple
+    no-filter
+    v-model="incidentPriority"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -21,6 +22,26 @@
             <strong>{{ search }}</strong
             >".
           </v-list-item-title>
+        </v-list-item-content>
+      </v-list-item>
+    </template>
+    <template v-slot:selection="{ item, index }">
+      <v-chip close @click:close="value.splice(index, 1)">
+        <span v-if="item.project"> {{ item.project.name }}/ </span>{{ item.name }}
+      </v-chip>
+    </template>
+    <template v-slot:item="data">
+      <v-list-item-content>
+        <v-list-item-title> {{ data.item.project.name }}/{{ data.item.name }} </v-list-item-title>
+        <v-list-item-subtitle style="width: 200px" class="text-truncate">
+          {{ data.item.description }}
+        </v-list-item-subtitle>
+      </v-list-item-content>
+    </template>
+    <template v-slot:append-item>
+      <v-list-item v-if="more" @click="loadMore()">
+        <v-list-item-content>
+          <v-list-item-subtitle> Load More </v-list-item-subtitle>
         </v-list-item-content>
       </v-list-item>
     </template>
@@ -58,6 +79,8 @@ export default {
     return {
       loading: false,
       items: [],
+      more: false,
+      numItems: 5,
       search: null,
     }
   },
@@ -84,6 +107,10 @@ export default {
   },
 
   methods: {
+    loadMore() {
+      this.numItems = this.numItems + 5
+      this.fetchData()
+    },
     fetchData() {
       this.error = null
       this.loading = "error"
@@ -101,11 +128,25 @@ export default {
             project: [this.project],
           },
         }
-        filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions })
       }
+
+      let enabledFilter = [
+        {
+          model: "IncidentPriority",
+          field: "enabled",
+          op: "==",
+          value: "true",
+        },
+      ]
+
+      filterOptions = SearchUtils.createParametersFromTableOptions(
+        { ...filterOptions },
+        enabledFilter
+      )
 
       IncidentPriorityApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
+        this.total = response.data.total
         this.loading = false
 
         if (this.items.length < this.total) {

@@ -1,15 +1,15 @@
 from typing import List, Optional
 from pydantic import validator
 
-from sqlalchemy import event, Column, Boolean, ForeignKey, Integer, String, JSON
+from sqlalchemy import Column, Boolean, ForeignKey, Integer, String, JSON
 from sqlalchemy.ext.hybrid import hybrid_method
-from sqlalchemy.orm import relationship, object_session
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql.schema import UniqueConstraint
+from sqlalchemy.event import listen
 
-from sqlalchemy.sql.expression import true
 from sqlalchemy_utils import TSVectorType
 
-from dispatch.database.core import Base
+from dispatch.database.core import Base, ensure_unique_default_per_project
 from dispatch.enums import Visibility
 from dispatch.models import DispatchBase, ProjectMixin
 from dispatch.plugin.models import PluginMetadata
@@ -23,12 +23,29 @@ class IncidentType(ProjectMixin, Base):
     slug = Column(String)
     description = Column(String)
     exclude_from_metrics = Column(Boolean, default=False)
+
+    enabled = Column(Boolean, default=True)
     default = Column(Boolean, default=False)
-    visibility = Column(String, default=Visibility.open.value)
+    visibility = Column(String, default=Visibility.open)
     plugin_metadata = Column(JSON, default=[])
 
-    template_document_id = Column(Integer, ForeignKey("document.id"))
-    template_document = relationship("Document")
+    incident_template_document_id = Column(Integer, ForeignKey("document.id"))
+    incident_template_document = relationship(
+        "Document", foreign_keys=[incident_template_document_id]
+    )
+
+    executive_template_document_id = Column(Integer, ForeignKey("document.id"))
+    executive_template_document = relationship(
+        "Document", foreign_keys=[executive_template_document_id]
+    )
+
+    review_template_document_id = Column(Integer, ForeignKey("document.id"))
+    review_template_document = relationship("Document", foreign_keys=[review_template_document_id])
+
+    tracking_template_document_id = Column(Integer, ForeignKey("document.id"))
+    tracking_template_document = relationship(
+        "Document", foreign_keys=[tracking_template_document_id]
+    )
 
     commander_service_id = Column(Integer, ForeignKey("service.id"))
     commander_service = relationship("Service", foreign_keys=[commander_service_id])
@@ -48,24 +65,7 @@ class IncidentType(ProjectMixin, Base):
                 return m
 
 
-@event.listens_for(IncidentType.default, "set")
-def _revoke_other_default(target, value, oldvalue, initiator):
-    """Removes the previous default when a new one is set."""
-    session = object_session(target)
-    if session is None:
-        return
-
-    if value:
-        previous_default = (
-            session.query(IncidentType)
-            .filter(IncidentType.default == true())
-            .filter(IncidentType.project_id == target.project_id)
-            .one_or_none()
-        )
-
-        if previous_default:
-            previous_default.default = False
-            session.commit()
+listen(IncidentType.default, "set", ensure_unique_default_per_project)
 
 
 class Document(DispatchBase):
@@ -88,55 +88,34 @@ class Service(DispatchBase):
 # Pydantic models...
 class IncidentTypeBase(DispatchBase):
     name: str
+    visibility: Optional[str]
     description: Optional[str]
-
-
-class IncidentTypeCreate(IncidentTypeBase):
-    template_document: Optional[Document]
+    enabled: Optional[bool]
+    incident_template_document: Optional[Document]
+    executive_template_document: Optional[Document]
+    review_template_document: Optional[Document]
+    tracking_template_document: Optional[Document]
     commander_service: Optional[Service]
     liaison_service: Optional[Service]
-    plugin_metadata: List[PluginMetadata] = []
     exclude_from_metrics: Optional[bool] = False
     default: Optional[bool] = False
     project: Optional[ProjectRead]
+    plugin_metadata: List[PluginMetadata] = []
 
     @validator("plugin_metadata", pre=True)
     def replace_none_with_empty_list(cls, value):
         return [] if value is None else value
+
+
+class IncidentTypeCreate(IncidentTypeBase):
+    pass
 
 
 class IncidentTypeUpdate(IncidentTypeBase):
     id: int
-    visibility: Optional[Visibility]
-    template_document: Optional[Document]
-    commander_service: Optional[Service]
-    liaison_service: Optional[Service]
-    plugin_metadata: List[PluginMetadata] = []
-    exclude_from_metrics: Optional[bool] = False
-    default: Optional[bool] = False
-
-    @validator("plugin_metadata", pre=True)
-    def replace_none_with_empty_list(cls, value):
-        return [] if value is None else value
 
 
 class IncidentTypeRead(IncidentTypeBase):
-    id: int
-    visibility: Optional[Visibility]
-    template_document: Optional[Document]
-    commander_service: Optional[Service]
-    liaison_service: Optional[Service]
-    plugin_metadata: List[PluginMetadata] = []
-    exclude_from_metrics: Optional[bool] = False
-    default: Optional[bool] = False
-    project: ProjectRead
-
-    @validator("plugin_metadata", pre=True)
-    def replace_none_with_empty_list(cls, value):
-        return [] if value is None else value
-
-
-class IncidentTypeNested(IncidentTypeBase):
     id: int
 
 

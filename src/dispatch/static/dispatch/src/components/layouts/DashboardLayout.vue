@@ -5,22 +5,21 @@
     <app-drawer />
     <notification-snackbars-wrapper />
     <refresh />
-    <v-content>
-      <!-- Page Header -->
-      <page-header />
+    <v-main>
+      <organization-banner />
       <div class="page-wrapper">
         <router-view />
       </div>
-    </v-content>
+    </v-main>
   </v-app>
 </template>
 
 <script>
 import AppDrawer from "@/components/AppDrawer"
 import AppToolbar from "@/components/AppToolbar"
-import PageHeader from "@/components/PageHeader"
 import Refresh from "@/components/Refresh.vue"
 import NotificationSnackbarsWrapper from "@/components/NotificationSnackbarsWrapper.vue"
+import OrganizationBanner from "@/organization/OrganizationBanner.vue"
 
 export default {
   name: "DashboardLayout",
@@ -33,8 +32,8 @@ export default {
   components: {
     AppDrawer,
     AppToolbar,
-    PageHeader,
     Refresh,
+    OrganizationBanner,
     NotificationSnackbarsWrapper,
   },
 

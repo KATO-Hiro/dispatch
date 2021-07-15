@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+import validators
+from pydantic import BaseModel, validator
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, event, ForeignKey
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import relationship
@@ -9,7 +10,7 @@ from sqlalchemy.orm import relationship
 
 # SQLAlchemy models...
 class ProjectMixin(object):
-    """ Project mixin"""
+    """Project mixin"""
 
     @declared_attr
     def project_id(cls):  # noqa
@@ -17,11 +18,11 @@ class ProjectMixin(object):
 
     @declared_attr
     def project(cls):  # noqa
-        return relationship("Project", lazy="joined")
+        return relationship("Project")
 
 
 class TimeStampMixin(object):
-    """ Timestamping mixin"""
+    """Timestamping mixin"""
 
     created_at = Column(DateTime, default=datetime.utcnow)
     created_at._creation_order = 9998
@@ -38,7 +39,7 @@ class TimeStampMixin(object):
 
 
 class ContactMixin(TimeStampMixin):
-    """ Contact mixin"""
+    """Contact mixin"""
 
     is_active = Column(Boolean, default=True)
     is_external = Column(Boolean, default=False)
@@ -62,6 +63,21 @@ class DispatchBase(BaseModel):
     class Config:
         orm_mode = True
         validate_assignment = True
+        arbitrary_types_allowed = True
+        anystr_strip_whitespace = True
+
+
+class ResourceBase(DispatchBase):
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    weblink: Optional[str] = None
+
+    @validator("weblink")
+    def sanitize_weblink(cls, v):
+        if v:
+            if not validators.url(v):
+                raise ValueError("Weblink must be a valid url.")
+        return v
 
 
 class ContactBase(DispatchBase):
@@ -131,8 +147,4 @@ class IndividualReadNested(ContactBase):
 
 
 class TeamReadNested(ContactBase):
-    pass
-
-
-class PolicyReadNested(DispatchBase):
     pass

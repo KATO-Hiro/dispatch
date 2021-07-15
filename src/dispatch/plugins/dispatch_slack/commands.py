@@ -7,18 +7,20 @@ from sqlalchemy.orm import Session
 from dispatch.conversation import service as conversation_service
 from dispatch.conversation.enums import ConversationButtonActions
 from dispatch.database.core import resolve_attr
-from dispatch.decorators import background_task
 from dispatch.enums import Visibility
-from dispatch.incident import flows as incident_flows
 from dispatch.incident import service as incident_service
 from dispatch.incident.enums import IncidentStatus
+from dispatch.incident.messaging import send_incident_resources_ephemeral_message_to_participant
 from dispatch.participant import service as participant_service
 from dispatch.participant_role import service as participant_role_service
 from dispatch.participant_role.models import ParticipantRoleType
 from dispatch.plugin import service as plugin_service
 from dispatch.plugins.dispatch_slack import service as dispatch_slack_service
+from dispatch.plugins.dispatch_slack.models import TaskButton
+from dispatch.project import service as project_service
 from dispatch.task import service as task_service
-from dispatch.task.models import TaskStatus, Task
+from dispatch.task.enums import TaskStatus
+from dispatch.task.models import Task
 
 from .config import (
     SLACK_APP_USER_SLUG,
@@ -40,20 +42,13 @@ from .config import (
     SLACK_COMMAND_LIST_WORKFLOWS_SLUG,
 )
 
-from .modals import (
-    create_add_timeline_event_modal,
-    create_report_incident_modal,
-    create_update_notifications_group_modal,
-    create_update_participant_modal,
-    create_run_workflow_modal,
-)
+from .decorators import get_organization_from_channel_id, slack_background_task
 
 from .dialogs import (
     create_assign_role_dialog,
     create_engage_oncall_dialog,
     create_executive_report_dialog,
     create_tactical_report_dialog,
-    create_update_incident_dialog,
 )
 
 from .messaging import (
@@ -63,8 +58,18 @@ from .messaging import (
     create_command_run_by_non_privileged_user_message,
 )
 
+from .modals.incident.handlers import (
+    create_add_timeline_event_modal,
+    create_report_incident_modal,
+    create_update_incident_modal,
+    create_update_notifications_group_modal,
+    create_update_participant_modal,
+)
+
+from .modals.workflow.handlers import create_run_workflow_modal
+
+
 log = logging.getLogger(__name__)
-slack_client = dispatch_slack_service.create_slack_client()
 
 
 def base64_encode(input: str):
@@ -107,9 +112,9 @@ def check_command_restrictions(
     )
 
     # if any required role is active, allow command
-    for current_role in participant.current_roles:
+    for active_role in participant.active_roles:
         for allowed_role in command_permissons[command]:
-            if current_role.role == allowed_role:
+            if active_role.role == allowed_role:
                 return True
 
 
@@ -122,14 +127,14 @@ def command_functions(command: str):
         SLACK_COMMAND_LIST_INCIDENTS_SLUG: [list_incidents],
         SLACK_COMMAND_LIST_MY_TASKS_SLUG: [list_my_tasks],
         SLACK_COMMAND_LIST_PARTICIPANTS_SLUG: [list_participants],
-        SLACK_COMMAND_LIST_RESOURCES_SLUG: [incident_flows.incident_list_resources_flow],
+        SLACK_COMMAND_LIST_RESOURCES_SLUG: [list_resources],
         SLACK_COMMAND_LIST_TASKS_SLUG: [list_tasks],
         SLACK_COMMAND_REPORT_EXECUTIVE_SLUG: [create_executive_report_dialog],
         SLACK_COMMAND_REPORT_INCIDENT_SLUG: [create_report_incident_modal],
         SLACK_COMMAND_REPORT_TACTICAL_SLUG: [create_tactical_report_dialog],
-        SLACK_COMMAND_UPDATE_INCIDENT_SLUG: [create_update_incident_dialog],
         SLACK_COMMAND_UPDATE_NOTIFICATIONS_GROUP_SLUG: [create_update_notifications_group_modal],
         SLACK_COMMAND_UPDATE_PARTICIPANT_SLUG: [create_update_participant_modal],
+        SLACK_COMMAND_UPDATE_INCIDENT_SLUG: [create_update_incident_modal],
         SLACK_COMMAND_RUN_WORKFLOW_SLUG: [create_run_workflow_modal],
         SLACK_COMMAND_LIST_WORKFLOWS_SLUG: [list_workflows],
     }
@@ -156,21 +161,16 @@ def filter_tasks_by_assignee_and_creator(tasks: List[Task], by_assignee: str, by
     return filtered_tasks
 
 
-async def handle_slack_command(*, db_session, client, request, background_tasks):
+async def handle_slack_command(*, client, request, background_tasks):
     """Handles slack command message."""
     # We fetch conversation by channel id
     channel_id = request.get("channel_id")
-    conversation = conversation_service.get_by_channel_id_ignoring_channel_type(
-        db_session=db_session, channel_id=channel_id
-    )
 
+    db_session = get_organization_from_channel_id(channel_id=channel_id)
     # We get the name of command that was run
     command = request.get("command")
 
-    incident_id = 0
-    if conversation:
-        incident_id = conversation.incident_id
-    else:
+    if not db_session:
         if command not in [SLACK_COMMAND_REPORT_INCIDENT_SLUG, SLACK_COMMAND_LIST_INCIDENTS_SLUG]:
             # We let the user know that incident-specific commands
             # can only be run in incident conversations
@@ -199,40 +199,89 @@ async def handle_slack_command(*, db_session, client, request, background_tasks)
                 command, public_conversations
             )
 
+    conversation = conversation_service.get_by_channel_id_ignoring_channel_type(
+        db_session=db_session, channel_id=channel_id
+    )
+
     user_id = request.get("user_id")
     user_email = await dispatch_slack_service.get_user_email_async(client, user_id)
 
     # some commands are sensitive and we only let non-participants execute them
     allowed = check_command_restrictions(
-        command=command, user_email=user_email, incident_id=incident_id, db_session=db_session
+        command=command,
+        user_email=user_email,
+        incident_id=conversation.incident.id,
+        db_session=db_session,
     )
     if not allowed:
         return create_command_run_by_non_privileged_user_message(command)
 
     for f in command_functions(command):
-        background_tasks.add_task(f, incident_id, command=request)
+        background_tasks.add_task(
+            f,
+            user_id,
+            user_email,
+            channel_id,
+            conversation.incident.id,
+            command=request,
+        )
 
     return INCIDENT_CONVERSATION_COMMAND_MESSAGE.get(command, f"Running... Command: {command}")
 
 
-@background_task
-def list_my_tasks(incident_id: int, command: dict = None, db_session=None):
-    """Returns the list of incident tasks to the user as an ephemeral message."""
-    user_email = dispatch_slack_service.get_user_email(slack_client, command["user_id"])
-    list_tasks(
-        incident_id=incident_id,
-        command=command,
-        db_session=db_session,
-        by_creator=user_email,
-        by_assignee=user_email,
-    )
-
-
-@background_task
-def list_tasks(
+@slack_background_task
+def list_resources(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
     incident_id: int,
     command: dict = None,
     db_session=None,
+    slack_client=None,
+):
+    """Runs the list incident resources flow."""
+    # we load the incident instance
+    incident = incident_service.get(db_session=db_session, incident_id=incident_id)
+
+    # we send the list of resources to the participant
+    send_incident_resources_ephemeral_message_to_participant(
+        command["user_id"], incident, db_session
+    )
+
+
+@slack_background_task
+def list_my_tasks(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    command: dict = None,
+    db_session=None,
+    slack_client=None,
+):
+    """Returns the list of incident tasks to the user as an ephemeral message."""
+    list_tasks(
+        user_id=user_id,
+        user_email=user_email,
+        channel_id=channel_id,
+        incident_id=incident_id,
+        command=command,
+        by_creator=user_email,
+        by_assignee=user_email,
+        db_session=db_session,
+        slack_client=slack_client,
+    )
+
+
+@slack_background_task
+def list_tasks(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    command: dict = None,
+    db_session=None,
+    slack_client=None,
     by_creator: str = None,
     by_assignee: str = None,
 ):
@@ -243,14 +292,14 @@ def list_tasks(
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*{status.value} Incident Tasks*"},
+                "text": {"type": "mrkdwn", "text": f"*{status} Incident Tasks*"},
             }
         )
-        button_text = "Resolve" if status.value == TaskStatus.open else "Re-open"
-        action_type = "resolve" if status.value == TaskStatus.open else "reopen"
+        button_text = "Resolve" if status == TaskStatus.open else "Re-open"
+        action_type = "resolve" if status == TaskStatus.open else "reopen"
 
         tasks = task_service.get_all_by_incident_id_and_status(
-            db_session=db_session, incident_id=incident_id, status=status.value
+            db_session=db_session, incident_id=incident_id, status=status
         )
 
         if by_creator or by_assignee:
@@ -258,6 +307,13 @@ def list_tasks(
 
         for idx, task in enumerate(tasks):
             assignees = [f"<{a.individual.weblink}|{a.individual.name}>" for a in task.assignees]
+
+            task_button = TaskButton(
+                organization_slug=task.project.organization.slug,
+                action_type=action_type,
+                incident_id=incident_id,
+                resource_id=task.resource_id,
+            )
 
             blocks.append(
                 {
@@ -270,11 +326,11 @@ def list_tasks(
                             f"*Assignees:* {', '.join(assignees)}"
                         ),
                     },
-                    "block_id": f"{ConversationButtonActions.update_task_status.value}-{task.status}-{idx}",
+                    "block_id": f"{ConversationButtonActions.update_task_status}-{task.status}-{idx}",
                     "accessory": {
                         "type": "button",
                         "text": {"type": "plain_text", "text": button_text},
-                        "value": f"{action_type}-{base64_encode(task.resource_id)}",
+                        "value": task_button.json(),
                     },
                 }
             )
@@ -282,15 +338,23 @@ def list_tasks(
 
     dispatch_slack_service.send_ephemeral_message(
         slack_client,
-        command["channel_id"],
-        command["user_id"],
+        channel_id,
+        user_id,
         "Incident Task List",
         blocks=blocks,
     )
 
 
-@background_task
-def list_workflows(incident_id: int, command: dict = None, db_session=None):
+@slack_background_task
+def list_workflows(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    command: dict = None,
+    db_session=None,
+    slack_client=None,
+):
     """Returns the list of incident workflows to the user as an ephemeral message."""
     incident = incident_service.get(db_session=db_session, incident_id=incident_id)
 
@@ -321,15 +385,23 @@ def list_workflows(incident_id: int, command: dict = None, db_session=None):
 
     dispatch_slack_service.send_ephemeral_message(
         slack_client,
-        command["channel_id"],
-        command["user_id"],
+        channel_id,
+        user_id,
         "Incident Workflow List",
         blocks=blocks,
     )
 
 
-@background_task
-def list_participants(incident_id: int, command: dict = None, db_session=None):
+@slack_background_task
+def list_participants(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    command: dict = None,
+    db_session=None,
+    slack_client=None,
+):
     """Returns the list of incident participants to the user as an ephemeral message."""
     blocks = []
     blocks.append(
@@ -347,14 +419,14 @@ def list_participants(incident_id: int, command: dict = None, db_session=None):
     )
 
     for participant in participants:
-        if participant.is_active:
+        if participant.active_roles:
             participant_email = participant.individual.email
-            participant_info = contact_plugin.instance.get(participant_email)
-            participant_name = participant_info["fullname"]
-            participant_team = participant_info["team"]
-            participant_department = participant_info["department"]
-            participant_location = participant_info["location"]
-            participant_weblink = participant_info["weblink"]
+            participant_info = contact_plugin.instance.get(participant_email, db_session=db_session)
+            participant_name = participant_info.get("fullname", participant.individual.email)
+            participant_team = participant_info.get("team", "Unknown")
+            participant_department = participant_info.get("department", "Unknown")
+            participant_location = participant_info.get("location", "Unknown")
+            participant_weblink = participant_info.get("weblink")
             participant_avatar_url = dispatch_slack_service.get_user_avatar_url(
                 slack_client, participant_email
             )
@@ -372,12 +444,13 @@ def list_participants(incident_id: int, command: dict = None, db_session=None):
             for role in participant_active_roles:
                 participant_roles.append(role.role)
 
+            # TODO we should make this more resilient to missing data (kglisson)
             block = {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f"*Name:* <{participant_weblink}|{participant_name}>\n"
+                        f"*Name:* <{participant_weblink}|{participant_name} ({participant_email})>\n"
                         f"*Team*: {participant_team}, {participant_department}\n"
                         f"*Location*: {participant_location}\n"
                         f"*Incident Role(s)*: {(', ').join(participant_roles)}\n"
@@ -403,43 +476,62 @@ def list_participants(incident_id: int, command: dict = None, db_session=None):
 
     dispatch_slack_service.send_ephemeral_message(
         slack_client,
-        command["channel_id"],
-        command["user_id"],
+        channel_id,
+        user_id,
         "Incident Participant List",
         blocks=blocks,
     )
 
 
-@background_task
-def list_incidents(incident_id: int, command: dict = None, db_session=None):
+@slack_background_task
+def list_incidents(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    command: dict = None,
+    db_session=None,
+    slack_client=None,
+):
     """Returns the list of current active and stable incidents,
     and closed incidents in the last 24 hours."""
+    projects = []
     incidents = []
 
     # scopes reply to the current incident's project
     incident = incident_service.get(db_session=db_session, incident_id=incident_id)
 
-    # We fetch active incidents
-    incidents = incident_service.get_all_by_status(
-        db_session=db_session, project_id=incident.project.id, status=IncidentStatus.active.value
-    )
-    # We fetch stable incidents
-    incidents.extend(
-        incident_service.get_all_by_status(
-            db_session=db_session,
-            project_id=incident.project.id,
-            status=IncidentStatus.stable.value,
+    if incident:
+        # command was run in an incident conversation
+        projects.append(incident.project)
+    else:
+        # command was run in a non-incident conversation
+        projects = project_service.get_all(db_session=db_session)
+
+    for project in projects:
+        # we fetch active incidents
+        incidents.extend(
+            incident_service.get_all_by_status(
+                db_session=db_session, project_id=project.id, status=IncidentStatus.active
+            )
         )
-    )
-    # We fetch closed incidents in the last 24 hours
-    incidents.extend(
-        incident_service.get_all_last_x_hours_by_status(
-            db_session=db_session,
-            project_id=incident.project.id,
-            status=IncidentStatus.closed.value,
-            hours=24,
+        # We fetch stable incidents
+        incidents.extend(
+            incident_service.get_all_by_status(
+                db_session=db_session,
+                project_id=project.id,
+                status=IncidentStatus.stable,
+            )
         )
-    )
+        # We fetch closed incidents in the last 24 hours
+        incidents.extend(
+            incident_service.get_all_last_x_hours_by_status(
+                db_session=db_session,
+                project_id=project.id,
+                status=IncidentStatus.closed,
+                hours=24,
+            )
+        )
 
     blocks = []
     blocks.append({"type": "header", "text": {"type": "plain_text", "text": "List of Incidents"}})
@@ -460,7 +552,8 @@ def list_incidents(incident_id: int, command: dict = None, db_session=None):
                                     f"*Type*: {incident.incident_type.name}\n"
                                     f"*Priority*: {incident.incident_priority.name}\n"
                                     f"*Status*: {incident.status}\n"
-                                    f"*Incident Commander*: <{incident.commander.individual.weblink}|{incident.commander.individual.name}>"
+                                    f"*Incident Commander*: <{incident.commander.individual.weblink}|{incident.commander.individual.name}>\n"
+                                    f"*Project*: {incident.project.name}"
                                 ),
                             },
                         }
@@ -470,8 +563,8 @@ def list_incidents(incident_id: int, command: dict = None, db_session=None):
 
     dispatch_slack_service.send_ephemeral_message(
         slack_client,
-        command["channel_id"],
-        command["user_id"],
+        channel_id,
+        user_id,
         "Incident List",
         blocks=blocks,
     )

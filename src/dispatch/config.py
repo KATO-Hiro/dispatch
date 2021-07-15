@@ -148,6 +148,9 @@ VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL = config(
 VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID = config(
     "VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID", default=""
 )
+VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN = config(
+    "VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN", default=""
+)
 
 # static files
 DEFAULT_STATIC_DIR = os.path.join(
@@ -167,6 +170,23 @@ _QUOTED_DATABASE_PASSWORD = parse.quote(str(_DATABASE_CREDENTIAL_PASSWORD))
 DATABASE_NAME = config("DATABASE_NAME", default="dispatch")
 DATABASE_PORT = config("DATABASE_PORT", default="5432")
 SQLALCHEMY_DATABASE_URI = f"postgresql+psycopg2://{_DATABASE_CREDENTIAL_USER}:{_QUOTED_DATABASE_PASSWORD}@{DATABASE_HOSTNAME}:{DATABASE_PORT}/{DATABASE_NAME}"
+
+ALEMBIC_CORE_REVISION_PATH = config(
+    "ALEMBIC_CORE_REVISION_PATH",
+    default=f"{os.path.dirname(os.path.realpath(__file__))}/database/revisions/core",
+)
+ALEMBIC_TENANT_REVISION_PATH = config(
+    "ALEMBIC_TENANT_REVISION_PATH",
+    default=f"{os.path.dirname(os.path.realpath(__file__))}/database/revisions/tenant",
+)
+ALEMBIC_INI_PATH = config(
+    "ALEMBIC_INI_PATH",
+    default=f"{os.path.dirname(os.path.realpath(__file__))}/alembic.ini",
+)
+ALEMBIC_MULTI_TENANT_MIGRATION_PATH = config(
+    "ALEMBIC_MULTI_TENANT_MIGRATION_PATH",
+    default=f"{os.path.dirname(os.path.realpath(__file__))}/database/revisions/multi-tenant-migration.sql",
+)
 
 # incident resources
 INCIDENT_STORAGE_FOLDER_ID = config("INCIDENT_STORAGE_FOLDER_ID", default=None)
@@ -191,36 +211,6 @@ INCIDENT_RESOURCE_TACTICAL_GROUP = config(
 )
 INCIDENT_RESOURCE_NOTIFICATIONS_GROUP = config(
     "INCIDENT_RESOURCE_NOTIFICATIONS_GROUP", default="google-group-participant-notifications-group"
-)
-INCIDENT_RESOURCE_INVESTIGATION_SHEET_TEMPLATE = config(
-    "INCIDENT_RESOURCE_INVESTIGATION_SHEET_TEMPLATE", default="dispatch-incident-sheet-template"
-)
-INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT_TEMPLATE = config(
-    "INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT_TEMPLATE",
-    default="dispatch-incident-review-document-template",
-)
-INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT_TEMPLATE = config(
-    "INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT_TEMPLATE",
-    default="dispatch-executive-report-document-template",
-)
-INCIDENT_RESOURCE_INVESTIGATION_DOCUMENT = config(
-    "INCIDENT_RESOURCE_INVESTIGATION_DOCUMENT", default="dispatch-incident-document"
-)
-INCIDENT_RESOURCE_INVESTIGATION_SHEET = config(
-    "INCIDENT_RESOURCE_INVESTIGATION_SHEET", default="dispatch-incident-sheet"
-)
-INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT = config(
-    "INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT", default="dispatch-incident-review-document"
-)
-INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT = config(
-    "INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT", default="dispatch-executive-report-document"
-)
-INCIDENT_RESOURCE_CONVERSATION_REFERENCE_DOCUMENT = config(
-    "INCIDENT_RESOURCE_CONVERSATION_REFERENCE_DOCUMENT",
-    default="dispatch-conversation-reference-document",
-)
-INCIDENT_RESOURCE_INCIDENT_FAQ_DOCUMENT = config(
-    "INCIDENT_RESOURCE_INCIDENT_FAQ_DOCUMENT", default="dispatch-incident-faq-document"
 )
 INCIDENT_RESOURCE_INCIDENT_TASK = config(
     "INCIDENT_RESOURCE_INCIDENT_TASK", default="google-docs-incident-task"

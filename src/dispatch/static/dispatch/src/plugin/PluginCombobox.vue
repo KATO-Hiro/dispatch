@@ -1,13 +1,15 @@
 <template>
   <v-combobox
-    v-model="plugin"
     :items="items"
-    item-text="title"
-    :search-input.sync="search"
-    hide-selected
     :label="label"
     :loading="loading"
+    :search-input.sync="search"
     @update:search-input="getFilteredData()"
+    deletable-chips
+    hide-selected
+    item-text="slug"
+    no-filter
+    v-model="plugin"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -28,7 +30,7 @@
           </div>
         </v-list-item-title>
         <v-list-item-subtitle>
-          <div class="text-truncate">
+          <div style="width: 200px" class="text-truncate">
             {{ data.item.description }}
           </div>
         </v-list-item-subtitle>
@@ -54,10 +56,8 @@ export default {
   name: "PluginCombobox",
   props: {
     value: {
-      type: [Object, String],
-      default: function () {
-        return null
-      },
+      type: [Object],
+      default: null,
     },
     type: {
       type: String,
@@ -97,26 +97,25 @@ export default {
   },
 
   created() {
-    this.fetchData({})
+    this.fetchData()
   },
 
   methods: {
     loadMore() {
       this.numItems = this.numItems + 5
-      this.getFilteredData({
-        q: this.search,
-        itemsPerPage: this.numItems,
-      })
+      this.fetchData()
     },
-    fetchData(filterOptions) {
+    fetchData() {
       this.error = null
       this.loading = "error"
 
-      filterOptions = {
-        ...filterOptions,
+      let filterOptions = {
         q: this.search,
+        sortBy: ["slug"],
+        descending: [false],
+        itemsPerPage: this.numItems,
         filters: {
-          type: [this.type],
+          plugin: [{ model: "Plugin", field: "type", value: this.type }],
         },
       }
 
@@ -135,8 +134,8 @@ export default {
         this.loading = false
       })
     },
-    getFilteredData: debounce(function (options) {
-      this.fetchData(options)
+    getFilteredData: debounce(function () {
+      this.fetchData()
     }, 500),
   },
 }

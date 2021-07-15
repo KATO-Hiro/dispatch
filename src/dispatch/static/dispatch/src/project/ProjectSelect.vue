@@ -11,7 +11,11 @@
     <template v-slot:item="data">
       <v-list-item-content>
         <v-list-item-title v-text="data.item.name" />
-        <v-list-item-subtitle v-text="data.item.description" />
+        <v-list-item-subtitle
+          style="width: 200px"
+          class="text-truncate"
+          v-text="data.item.description"
+        />
       </v-list-item-content>
     </template>
   </v-select>
@@ -19,8 +23,6 @@
 
 <script>
 import { cloneDeep } from "lodash"
-
-import SearchUtils from "@/search/utils"
 import ProjectApi from "@/project/api"
 
 export default {
@@ -60,16 +62,6 @@ export default {
       itemsPerPage: 50,
       sortBy: ["name"],
       descending: [false],
-    }
-
-    if (this.project) {
-      filterOptions = {
-        ...filterOptions,
-        filters: {
-          project: [this.project],
-        },
-      }
-      filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions })
     }
 
     ProjectApi.getAll(filterOptions).then((response) => {

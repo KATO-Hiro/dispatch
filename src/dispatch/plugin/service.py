@@ -4,8 +4,8 @@ from fastapi.encoders import jsonable_encoder
 
 from dispatch.exceptions import InvalidConfiguration
 from dispatch.plugins.bases import OncallPlugin
-from dispatch.service import service as service_service
 from dispatch.project import service as project_service
+from dispatch.service import service as service_service
 
 from .models import Plugin, PluginInstance, PluginInstanceCreate, PluginInstanceUpdate
 
@@ -46,7 +46,7 @@ def get_active_instance(
     *, db_session, plugin_type: str, project_id=None
 ) -> Optional[PluginInstance]:
     """Fetches the current active plugin for the given type."""
-    plugin = (
+    return (
         db_session.query(PluginInstance)
         .join(Plugin)
         .filter(Plugin.type == plugin_type)
@@ -55,19 +55,12 @@ def get_active_instance(
         .one_or_none()
     )
 
-    if not plugin:
-        log.warning(
-            f"Attempted to fetch active plugin, but none were found. PluginType: {plugin_type} ProjectId: {project_id}"
-        )
-
-    return plugin
-
 
 def get_active_instance_by_slug(
     *, db_session, slug: str, project_id=None
 ) -> Optional[PluginInstance]:
     """Fetches the current active plugin for the given type."""
-    plugin = (
+    return (
         db_session.query(PluginInstance)
         .join(Plugin)
         .filter(Plugin.slug == slug)
@@ -75,13 +68,6 @@ def get_active_instance_by_slug(
         .filter(PluginInstance.enabled == True)  # noqa
         .one_or_none()
     )
-
-    if not plugin:
-        log.warning(
-            f"Attempted to fetch active plugin, but none were found. PluginSlug: {slug} ProjectId: {project_id}"
-        )
-
-    return plugin
 
 
 def get_enabled_instances_by_type(
@@ -129,15 +115,6 @@ def update_instance(
                 db_session.add(enabled_plugin_instances[0])
 
     if not plugin_instance_in.enabled:  # user wants to disable the plugin
-        if plugin_instance.plugin.required:
-            enabled_plugins = get_enabled_instances_by_type(
-                db_session=db_session, plugin_type=plugin_instance.plugin.type
-            )
-            if len(enabled_plugins) == 1:
-                raise InvalidConfiguration(
-                    f"Cannot disable plugin instance: {plugin_instance.plugin.title}. It is required and no other plugin instances of type {plugin_instance.plugin.type} are enabled."
-                )
-
         if plugin_instance.plugin.type == OncallPlugin.type:
             oncall_services = service_service.get_all_by_type_and_status(
                 db_session=db_session, service_type=plugin_instance.plugin.slug, is_active=True

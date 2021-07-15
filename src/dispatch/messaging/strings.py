@@ -8,14 +8,7 @@ from typing import List
 from dispatch.conversation.enums import ConversationButtonActions
 from dispatch.incident.enums import IncidentStatus
 
-from dispatch.config import (
-    INCIDENT_RESOURCE_CONVERSATION_REFERENCE_DOCUMENT,
-    INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT,
-    INCIDENT_RESOURCE_INCIDENT_FAQ_DOCUMENT,
-    INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT,
-    INCIDENT_RESOURCE_INVESTIGATION_DOCUMENT,
-    INCIDENT_RESOURCE_INVESTIGATION_SHEET,
-)
+from dispatch.enums import DocumentResourceTypes, DocumentResourceReferenceTypes
 
 
 class MessageType(str, Enum):
@@ -26,6 +19,7 @@ class MessageType(str, Enum):
     incident_feedback_daily_report = "incident-feedback-daily-report"
     incident_management_help_tips = "incident-management-help-tips"
     incident_notification = "incident-notification"
+    incident_open_tasks = "incident-open-tasks"
     incident_participant_suggested_reading = "incident-participant-suggested-reading"
     incident_participant_welcome = "incident-participant-welcome"
     incident_rating_feedback = "incident-rating-feedback"
@@ -37,19 +31,10 @@ class MessageType(str, Enum):
 
 
 INCIDENT_STATUS_DESCRIPTIONS = {
-    IncidentStatus.active.value: "This incident is under active investigation.",
-    IncidentStatus.stable.value: "This incident is stable, the bulk of the investigation has been completed or most of the risk has been mitigated.",
-    IncidentStatus.closed.value: "This no longer requires additional involvement, long term incident action items have been assigned to their respective owners.",
+    IncidentStatus.active: "This incident is under active investigation.",
+    IncidentStatus.stable: "This incident is stable, the bulk of the investigation has been completed or most of the risk has been mitigated.",
+    IncidentStatus.closed: "This no longer requires additional involvement, long term incident action items have been assigned to their respective owners.",
 }
-
-INCIDENT_TASK_REMINDER_DESCRIPTION = """
-You are assigned to the following incident tasks.
-This is a reminder that these tasks have passed their due date.
-Please review and update them as appropriate. Resolving them will stop the reminders.""".replace(
-    "\n", " "
-).strip()
-
-INCIDENT_TASK_LIST_DESCRIPTION = """The following are open incident tasks."""
 
 DOCUMENT_EVERGREEN_REMINDER_DESCRIPTION = """
 You are the owner of the following incident documents.
@@ -159,12 +144,12 @@ This is a document that contains an executive report about the incident.""".repl
 ).strip()
 
 INCIDENT_DOCUMENT_DESCRIPTIONS = {
-    INCIDENT_RESOURCE_CONVERSATION_REFERENCE_DOCUMENT: INCIDENT_CONVERSATION_REFERENCE_DOCUMENT_DESCRIPTION,
-    INCIDENT_RESOURCE_EXECUTIVE_REPORT_DOCUMENT: INCIDENT_EXECUTIVE_REPORT_DOCUMENT_DESCRIPTION,
-    INCIDENT_RESOURCE_INCIDENT_FAQ_DOCUMENT: INCIDENT_FAQ_DOCUMENT_DESCRIPTION,
-    INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT: INCIDENT_REVIEW_DOCUMENT_DESCRIPTION,
-    INCIDENT_RESOURCE_INVESTIGATION_DOCUMENT: INCIDENT_INVESTIGATION_DOCUMENT_DESCRIPTION,
-    INCIDENT_RESOURCE_INVESTIGATION_SHEET: INCIDENT_INVESTIGATION_SHEET_DESCRIPTION,
+    DocumentResourceReferenceTypes.conversation: INCIDENT_CONVERSATION_REFERENCE_DOCUMENT_DESCRIPTION,
+    DocumentResourceReferenceTypes.faq: INCIDENT_FAQ_DOCUMENT_DESCRIPTION,
+    DocumentResourceTypes.executive: INCIDENT_EXECUTIVE_REPORT_DOCUMENT_DESCRIPTION,
+    DocumentResourceTypes.review: INCIDENT_REVIEW_DOCUMENT_DESCRIPTION,
+    DocumentResourceTypes.incident: INCIDENT_INVESTIGATION_DOCUMENT_DESCRIPTION,
+    DocumentResourceTypes.tracking: INCIDENT_INVESTIGATION_SHEET_DESCRIPTION,
 }
 
 INCIDENT_PARTICIPANT_WELCOME_DESCRIPTION = """
@@ -236,10 +221,26 @@ you can use `{{command}}` in the conversation to assist you in closing your inci
 ).strip()
 
 INCIDENT_TASK_NEW_DESCRIPTION = """
-The following incident task has been created in the incident document.\n\n*Description:* {{task_description}}\n\n*Assignees:* {{task_assignees|join(',')}}"""
+The following incident task has been created in the incident document.\n\n*Description:* {{task_description}}\n\n*Creator*: {{task_creator}}\n\n*Assignees:* {{task_assignees|join(',')}}"""
 
 INCIDENT_TASK_RESOLVED_DESCRIPTION = """
-The following incident task has been resolved in the incident document.\n\n*Description:* {{task_description}}\n\n*Assignees:* {{task_assignees|join(',')}}"""
+The following incident task has been resolved in the incident document.\n\n*Description:* {{task_description}}\n\n*Creator*: {{task_creator}}\n\n*Assignees:* {{task_assignees|join(',')}}"""
+
+INCIDENT_TASK_REMINDER_DESCRIPTION = """
+You are assigned to the following incident tasks.
+This is a reminder that these tasks have passed their due date.
+Please review and update them as appropriate. Resolving them will stop the reminders.""".replace(
+    "\n", " "
+).strip()
+
+INCIDENT_TASK_LIST_DESCRIPTION = """The following are open incident tasks."""
+
+INCIDENT_OPEN_TASKS_DESCRIPTION = """
+Please resolve or transfer ownership of all the open incident tasks owned by you directly in the incident documents or using the <{{dispatch_ui_url}}|Dispatch Web UI>,
+then wait about 30 seconds for Dispatch to update the tasks before leaving the incident channel.
+""".replace(
+    "\n", " "
+).strip()
 
 INCIDENT_WORKFLOW_CREATED_DESCRIPTION = """
 A new workflow instance has been created.
@@ -284,7 +285,7 @@ Hey, I see you're the Incident Commander for {{name}} ("{{title}}"). Here are a 
 \n • Invite incident participants and team oncalls by mentioning them in the incident channel or using the Slack `{{engage_oncall_command}}` command.
 \n • Keep incident participants and stakeholders informed using the `{{tactical_report_command}}` and `{{executive_report_command}}` commands.
 \n • Get links to all incident resources including the Slack commands reference sheet and Security Incident Response FAQ by running the `{{list_resources_command}}` command.
-\n\n
+\n
 To find a Slack command, simply type `/` in the message field or click the lightning bolt icon to the left of the message field.
 """
 
@@ -308,8 +309,8 @@ INCIDENT_NAME_WITH_ENGAGEMENT = {
     "title_link": "{{ticket_weblink}}",
     "text": INCIDENT_NOTIFICATION_PURPOSES_FYI,
     "button_text": "Join Incident",
-    "button_value": "{{incident_id}}",
-    "button_action": ConversationButtonActions.invite_user.value,
+    "button_value": "{{organization_slug}}-{{incident_id}}",
+    "button_action": ConversationButtonActions.invite_user,
 }
 
 INCIDENT_NAME_WITH_ENGAGEMENT_NO_DESCRIPTION = {
@@ -584,8 +585,8 @@ INCIDENT_CLOSED_RATING_FEEDBACK_NOTIFICATION = [
         "title_link": "{{ticket_weblink}}",
         "text": INCIDENT_CLOSED_RATING_FEEDBACK_DESCRIPTION,
         "button_text": "Provide Feeback",
-        "button_value": "{{incident_id}}",
-        "button_action": ConversationButtonActions.provide_feedback.value,
+        "button_value": "{{organization_slug}}-{{incident_id}}",
+        "button_action": ConversationButtonActions.provide_feedback,
     }
 ]
 
@@ -632,6 +633,13 @@ INCIDENT_MANAGEMENT_HELP_TIPS_MESSAGE = [
     {
         "title": "{{name}} Incident - Management Help Tips",
         "text": INCIDENT_MANAGEMENT_HELP_TIPS_MESSAGE_DESCRIPTION,
+    }
+]
+
+INCIDENT_OPEN_TASKS = [
+    {
+        "title": "{{title}}",
+        "text": INCIDENT_OPEN_TASKS_DESCRIPTION,
     }
 ]
 

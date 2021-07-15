@@ -26,10 +26,12 @@ instance.interceptors.request.use(
 )
 
 instance.interceptors.request.use(function (config) {
-  let currentOrganization = store.state.route.params.organization || null
+  if (!config.url.includes("organization")) {
+    let currentOrganization = store.state.route.params.organization || null
 
-  if (currentOrganization) {
-    config.url = `${currentOrganization}${config.url}`
+    if (currentOrganization) {
+      config.url = `${currentOrganization}${config.url}`
+    }
   }
   return config
 })
@@ -39,24 +41,25 @@ instance.interceptors.response.use(
     return res
   },
   function (err) {
-    if (err.response.status == 401) {
-      if (authProviderSlug === "dispatch-auth-provider-basic") {
-        router.push({ name: "BasicLogin" })
-        store.dispatch("auth/logout")
+    if (err.response) {
+      if (err.response.status == 401) {
+        if (authProviderSlug === "dispatch-auth-provider-basic") {
+          router.push({ name: "BasicLogin" })
+          store.dispatch("auth/logout")
+        }
       }
+      if (err.response.status == 500) {
+        store.commit(
+          "notification_backend/addBeNotification",
+          {
+            text: "Something has gone wrong, please retry or let your admin know that you received this error.",
+            type: "error",
+          },
+          { root: true }
+        )
+      }
+      return Promise.reject(err)
     }
-    if (err.response.status == 500) {
-      store.commit(
-        "notification_backend/addBeNotification",
-        {
-          text:
-            "Something has gone very wrong, please retry or let your admin know that you received this error.",
-          type: "error",
-        },
-        { root: true }
-      )
-    }
-    return Promise.reject(err)
   }
 )
 

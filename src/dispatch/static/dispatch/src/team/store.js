@@ -1,14 +1,13 @@
-import TeamApi from "@/team/api"
-
 import { getField, updateField } from "vuex-map-fields"
 import { debounce } from "lodash"
+
+import TeamApi from "@/team/api"
+import SearchUtils from "@/search/utils"
 
 const getDefaultSelectedState = () => {
   return {
     name: null,
-    terms: [],
-    incident_priorities: [],
-    incident_types: [],
+    filters: [],
     id: null,
     created_at: null,
     updated_at: null,
@@ -38,6 +37,9 @@ const state = {
       itemsPerPage: 10,
       sortBy: ["name"],
       descending: [true],
+      filters: {
+        project: [],
+      },
     },
     loading: false,
   },
@@ -50,7 +52,8 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    return TeamApi.getAll(state.table.options)
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    return TeamApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)
         commit("SET_TABLE_ROWS", response.data)
@@ -58,7 +61,7 @@ const actions = {
       .catch(() => {
         commit("SET_TABLE_LOADING", false)
       })
-  }, 200),
+  }, 500),
   createEditShow({ commit }, team) {
     commit("SET_DIALOG_CREATE_EDIT", true)
     if (team) {
@@ -78,9 +81,11 @@ const actions = {
     commit("RESET_SELECTED")
   },
   save({ commit, dispatch }) {
+    commit("SET_SELECTED_LOADING", true)
     if (!state.selected.id) {
       return TeamApi.create(state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAll")
           commit(
@@ -90,6 +95,7 @@ const actions = {
           )
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -102,6 +108,7 @@ const actions = {
     } else {
       return TeamApi.update(state.selected.id, state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAll")
           commit(
@@ -111,6 +118,7 @@ const actions = {
           )
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -150,6 +158,9 @@ const mutations = {
   updateField,
   SET_SELECTED(state, value) {
     state.selected = Object.assign(state.selected, value)
+  },
+  SET_SELECTED_LOADING(state, value) {
+    state.selected.loading = value
   },
   SET_TABLE_LOADING(state, value) {
     state.table.loading = value

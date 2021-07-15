@@ -30,12 +30,12 @@ class IncidentCostBase(DispatchBase):
 
 
 class IncidentCostCreate(IncidentCostBase):
-    incident_cost_type: IncidentCostTypeCreate
+    incident_cost_type: IncidentCostTypeRead
     project: ProjectRead
 
 
 class IncidentCostUpdate(IncidentCostBase):
-    id: Optional[int]
+    id: Optional[int] = None
     incident_cost_type: IncidentCostTypeRead
 
 

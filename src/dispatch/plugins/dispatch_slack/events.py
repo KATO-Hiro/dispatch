@@ -1,10 +1,10 @@
 import arrow
+import logging
 import datetime
 
 from typing import List
 from pydantic import BaseModel
 
-from dispatch.decorators import background_task
 from dispatch.event import service as event_service
 from dispatch.incident import flows as incident_flows
 from dispatch.incident import service as incident_service
@@ -19,8 +19,9 @@ from .config import (
     SLACK_BAN_THREADS,
 )
 from .service import get_user_email
+from .decorators import slack_background_task, get_organization_from_channel_id
 
-slack_client = dispatch_slack_service.create_slack_client()
+log = logging.getLogger(__name__)
 
 
 class EventBodyItem(BaseModel):
@@ -85,7 +86,7 @@ def event_functions(event: EventEnvelope):
     """Interprets the events and routes it the appropriate function."""
     event_mappings = {
         "member_joined_channel": [member_joined_channel],
-        "member_left_channel": [incident_flows.incident_remove_participant_flow],
+        "member_left_channel": [member_left_channel],
         "message": [after_hours, ban_threads_warning],
         "message.groups": [],
         "message.im": [],
@@ -94,12 +95,19 @@ def event_functions(event: EventEnvelope):
     return event_mappings.get(event.event.type, [])
 
 
-async def handle_slack_event(*, db_session, client, event, background_tasks):
+async def handle_slack_event(*, client, event, background_tasks):
     """Handles slack event message."""
     user_id = event.event.user
     channel_id = get_channel_id_from_event(event)
 
     if user_id and channel_id:
+        db_session = get_organization_from_channel_id(channel_id=channel_id)
+        if not db_session:
+            log.info(
+                f"Unable to determine organization associated with channel id. ChannelId: {channel_id}"
+            )
+            return {"ok": ""}
+
         conversation = conversation_service.get_by_channel_id_ignoring_channel_type(
             db_session=db_session, channel_id=channel_id
         )
@@ -110,14 +118,27 @@ async def handle_slack_event(*, db_session, client, event, background_tasks):
 
             # Dispatch event functions to be executed in the background
             for f in event_functions(event):
-                background_tasks.add_task(f, user_email, conversation.incident_id, event=event)
+                background_tasks.add_task(
+                    f,
+                    user_id,
+                    user_email,
+                    channel_id,
+                    conversation.incident_id,
+                    event=event,
+                )
 
     return {"ok": ""}
 
 
-@background_task
+@slack_background_task
 def handle_reaction_added_event(
-    user_email: str, incident_id: int, event: EventEnvelope = None, db_session=None
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    event: EventEnvelope = None,
+    db_session=None,
+    slack_client=None,
 ):
     """Handles an event where a reaction is added to a message."""
     reaction = event.event.reaction
@@ -157,11 +178,19 @@ def is_business_hours(commander_tz: str):
     return now.weekday() not in [5, 6] and 9 <= now.hour < 17
 
 
-@background_task
-def after_hours(user_email: str, incident_id: int, event: EventEnvelope = None, db_session=None):
+@slack_background_task
+def after_hours(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    event: EventEnvelope = None,
+    db_session=None,
+    slack_client=None,
+):
     """Notifies the user that this incident is current in after hours mode."""
-    # we want to ignore user joined messages
-    if event.event.subtype == "group_join":
+    # we ignore user channel and group join messages
+    if event.event.subtype in ["channel_join", "group_join"]:
         return
 
     incident = incident_service.get(db_session=db_session, incident_id=incident_id)
@@ -194,21 +223,23 @@ def after_hours(user_email: str, incident_id: int, event: EventEnvelope = None, 
             db_session=db_session, incident_id=incident_id, email=user_email
         )
         if not participant.after_hours_notification:
-            user_id = dispatch_slack_service.resolve_user(slack_client, user_email)["id"]
             dispatch_slack_service.send_ephemeral_message(
-                slack_client, incident.conversation.channel_id, user_id, "", blocks=blocks
+                slack_client, channel_id, user_id, "", blocks=blocks
             )
             participant.after_hours_notification = True
             db_session.add(participant)
             db_session.commit()
 
 
-@background_task
+@slack_background_task
 def member_joined_channel(
+    user_id: str,
     user_email: str,
+    channel_id: str,
     incident_id: int,
     event: EventEnvelope,
     db_session=None,
+    slack_client=None,
 ):
     """Handles the member_joined_channel slack event."""
     participant = incident_flows.incident_add_or_reactivate_participant_flow(
@@ -219,12 +250,15 @@ def member_joined_channel(
         # we update the participant's metadata
         if not dispatch_slack_service.is_user(event.event.inviter):
             # we default to the incident commander when we don't know how the user was added
-            participant.added_by = participant_service.get_by_incident_id_and_role(
+            added_by_participant = participant_service.get_by_incident_id_and_role(
                 db_session=db_session,
                 incident_id=incident_id,
                 role=ParticipantRoleType.incident_commander,
             )
-            participant.added_reason = "User was automatically added by Dispatch."
+            participant.added_by = added_by_participant
+            participant.added_reason = (
+                f"Participant added by {added_by_participant.individual.name}"
+            )
 
         else:
             inviter_email = get_user_email(client=slack_client, user_id=event.event.inviter)
@@ -238,9 +272,29 @@ def member_joined_channel(
         db_session.commit()
 
 
-@background_task
+@slack_background_task
+def member_left_channel(
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    event: EventEnvelope,
+    db_session=None,
+    slack_client=None,
+):
+    """Handles the member_left_channel Slack event."""
+    incident_flows.incident_remove_participant_flow(user_email, incident_id, db_session=db_session)
+
+
+@slack_background_task
 def ban_threads_warning(
-    user_email: str, incident_id: int, event: EventEnvelope = None, db_session=None
+    user_id: str,
+    user_email: str,
+    channel_id: str,
+    incident_id: int,
+    event: EventEnvelope = None,
+    db_session=None,
+    slack_client=None,
 ):
     """Sends the user an ephemeral message if they use threads."""
     if not SLACK_BAN_THREADS:
@@ -256,8 +310,8 @@ def ban_threads_warning(
         message = "Please refrain from using threads in incident related channels. Threads make it harder for incident participants to maintain context."
         dispatch_slack_service.send_ephemeral_message(
             slack_client,
-            event.event.channel,
-            event.event.user,
+            channel_id,
+            user_id,
             message,
             thread_ts=event.event.thread_ts,
         )

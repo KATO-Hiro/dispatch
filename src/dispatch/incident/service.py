@@ -2,18 +2,19 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from dispatch.database.core import SessionLocal
+
 from dispatch.event import service as event_service
 from dispatch.incident_cost import service as incident_cost_service
 from dispatch.incident_priority import service as incident_priority_service
 from dispatch.incident_type import service as incident_type_service
-from dispatch.participant import flows as participant_flows
 from dispatch.participant_role.models import ParticipantRoleType
-from dispatch.plugin import service as plugin_service
 from dispatch.tag import service as tag_service
-from dispatch.tag.models import TagCreate
+from dispatch.tag.models import TagUpdate, TagCreate
 from dispatch.term import service as term_service
 from dispatch.term.models import TermUpdate
 from dispatch.project import service as project_service
+from dispatch.plugin import service as plugin_service
+from dispatch.participant import flows as participant_flows
 
 from .enums import IncidentStatus
 from .models import Incident, IncidentUpdate
@@ -33,10 +34,12 @@ def assign_incident_role(
     oncall_plugin = plugin_service.get_active_instance(
         db_session=db_session, project_id=incident.project.id, plugin_type="oncall"
     )
+    service_id = None
     if role == ParticipantRoleType.incident_commander:
         # default to reporter
         if incident.incident_type.commander_service:
             service = incident.incident_type.commander_service
+            service_id = service.id
             if oncall_plugin:
                 assignee_email = oncall_plugin.instance.get(service_id=service.external_id)
                 if incident.incident_priority.page_commander:
@@ -47,9 +50,10 @@ def assign_incident_role(
                         incident_description=incident.description,
                     )
 
-    elif role == ParticipantRoleType.liaison.value:
+    elif role == ParticipantRoleType.liaison:
         if incident.incident_type.liaison_service:
             service = incident.incident_type.liaison_service
+            service_id = service.id
             if oncall_plugin:
                 assignee_email = oncall_plugin.instance.get(service_id=service.external_id)
 
@@ -58,6 +62,7 @@ def assign_incident_role(
         assignee_email,
         incident,
         db_session,
+        service_id=service_id,
         role=role,
     )
 
@@ -102,10 +107,10 @@ def get_all_last_x_hours_by_status(
     """Returns all incidents of a given status in the last x hours."""
     now = datetime.utcnow()
 
-    if status == IncidentStatus.active.value:
+    if status == IncidentStatus.active:
         return (
             db_session.query(Incident)
-            .filter(Incident.status == IncidentStatus.active.value)
+            .filter(Incident.status == IncidentStatus.active)
             .filter(Incident.created_at >= now - timedelta(hours=hours))
             .filter(Incident.project_id == project_id)
             .offset(skip)
@@ -113,10 +118,10 @@ def get_all_last_x_hours_by_status(
             .all()
         )
 
-    if status == IncidentStatus.stable.value:
+    if status == IncidentStatus.stable:
         return (
             db_session.query(Incident)
-            .filter(Incident.status == IncidentStatus.stable.value)
+            .filter(Incident.status == IncidentStatus.stable)
             .filter(Incident.stable_at >= now - timedelta(hours=hours))
             .filter(Incident.project_id == project_id)
             .offset(skip)
@@ -124,10 +129,10 @@ def get_all_last_x_hours_by_status(
             .all()
         )
 
-    if status == IncidentStatus.closed.value:
+    if status == IncidentStatus.closed:
         return (
             db_session.query(Incident)
-            .filter(Incident.status == IncidentStatus.closed.value)
+            .filter(Incident.status == IncidentStatus.closed)
             .filter(Incident.closed_at >= now - timedelta(hours=hours))
             .filter(Incident.project_id == project_id)
             .offset(skip)
@@ -156,7 +161,7 @@ def create(
     project: str,
     incident_priority: str,
     incident_type: str,
-    reporter_email: str,
+    reporter: dict,
     title: str,
     status: str,
     description: str,
@@ -173,13 +178,18 @@ def create(
 
     # We get the incident type by name
     if not incident_type:
-        incident_type = incident_type_service.get_default(db_session=db_session)
+        incident_type = incident_type_service.get_default(
+            db_session=db_session, project_id=project.id
+        )
         if not incident_type:
             raise Exception("No incident type specified and no default has been defined.")
     else:
         incident_type = incident_type_service.get_by_name(
             db_session=db_session, project_id=project.id, name=incident_type["name"]
         )
+
+        if not incident_type.enabled:
+            raise Exception("Incident type must be enabled.")
 
     # We get the incident priority by name
     if not incident_priority:
@@ -192,6 +202,9 @@ def create(
         incident_priority = incident_priority_service.get_by_name(
             db_session=db_session, project_id=project.id, name=incident_priority["name"]
         )
+
+        if not incident_priority.enabled:
+            raise Exception("Incident priority must be enabled.")
 
     if not visibility:
         visibility = incident_type.visibility
@@ -222,13 +235,20 @@ def create(
     )
 
     # Add other incident roles (e.g. commander and liaison)
-    assign_incident_role(db_session, incident, reporter_email, ParticipantRoleType.reporter)
-
     assign_incident_role(
-        db_session, incident, reporter_email, ParticipantRoleType.incident_commander
+        db_session, incident, reporter["individual"]["email"], ParticipantRoleType.reporter
     )
 
-    assign_incident_role(db_session, incident, reporter_email, ParticipantRoleType.liaison)
+    assign_incident_role(
+        db_session,
+        incident,
+        reporter["individual"]["email"],
+        ParticipantRoleType.incident_commander,
+    )
+
+    assign_incident_role(
+        db_session, incident, reporter["individual"]["email"], ParticipantRoleType.liaison
+    )
 
     return incident
 
@@ -241,13 +261,19 @@ def update(*, db_session, incident: Incident, incident_in: IncidentUpdate) -> In
         name=incident_in.incident_priority.name,
     )
 
+    if not incident_priority.enabled:
+        raise Exception("Incident priority must be enabled.")
+
     incident_type = incident_type_service.get_by_name(
         db_session=db_session, project_id=incident.project.id, name=incident_in.incident_type.name
     )
 
+    if not incident_type.enabled:
+        raise Exception("Incident type must be enabled.")
+
     tags = []
     for t in incident_in.tags:
-        tags.append(tag_service.get_or_create(db_session=db_session, tag_in=TagCreate(**t)))
+        tags.append(tag_service.get_or_create(db_session=db_session, tag_in=TagUpdate(**t)))
 
     terms = []
     for t in incident_in.terms:

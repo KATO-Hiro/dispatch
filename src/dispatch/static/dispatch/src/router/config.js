@@ -14,7 +14,7 @@ export const publicRoute = [
     component: () => import(/* webpackChunkName: "errors-404" */ "@/views/error/NotFound.vue"),
   },
   {
-    path: "/auth",
+    path: "/:organization/auth/",
     component: BasicLayout,
     meta: { title: "Auth", icon: "view_compact", group: "auth" },
     children: [
@@ -41,6 +41,11 @@ export const publicRoute = [
     name: "500",
     meta: { title: "Server Error" },
     component: () => import(/* webpackChunkName: "errors-500" */ "@/views/error/Error.vue"),
+  },
+  {
+    path: "/implicit/callback",
+    name: "PKCEImplicityCallback",
+    meta: { requiresAuth: true },
   },
 ]
 
@@ -197,10 +202,11 @@ export const protectedRoute = [
           component: () => import(/* webpackChunkName: "projects-table" */ "@/project/Table.vue"),
         },
         {
-          path: "users",
-          name: "UserTable",
-          meta: { title: "Users", subMenu: "organization", group: "organization" },
-          component: () => import(/* webpackChunkName: "users-table" */ "@/auth/Table.vue"),
+          path: "members",
+          name: "OrganizationMemberTable",
+          meta: { title: "Members", subMenu: "organization", group: "organization" },
+          component: () =>
+            import(/* webpackChunkName: "users-table" */ "@/auth/OrganizationMemberTable.vue"),
         },
         {
           path: "projects",
@@ -213,18 +219,18 @@ export const protectedRoute = [
         },
         ...withPrefix("projects/", [
           {
-            path: "incidentPriorities",
-            name: "IncidentPriorityTable",
-            meta: { title: "Incident Priorities", subMenu: "project", group: "incident" },
-            component: () =>
-              import(/* webpackChunkName: "-table" */ "@/incident_priority/Table.vue"),
-          },
-          {
             path: "incidentTypes",
             name: "IncidentTypeTable",
             meta: { title: "Incident Types", subMenu: "project", group: "incident" },
             component: () =>
               import(/* webpackChunkName: "incident-type-table" */ "@/incident_type/Table.vue"),
+          },
+          {
+            path: "incidentPriorities",
+            name: "IncidentPriorityTable",
+            meta: { title: "Incident Priorities", subMenu: "project", group: "incident" },
+            component: () =>
+              import(/* webpackChunkName: "-table" */ "@/incident_priority/Table.vue"),
           },
           {
             path: "incidentCostTypes",
@@ -254,6 +260,24 @@ export const protectedRoute = [
             name: "PluginTable",
             meta: { title: "Plugins", subMenu: "project", group: "incident" },
             component: () => import(/* webpackChunkName: "plugin-table" */ "@/plugin/Table.vue"),
+          },
+          {
+            path: "templates",
+            name: "TemplateTable",
+            meta: { title: "Templates", subMenu: "project", group: "incident" },
+            component: () =>
+              import(
+                /* webpackChunkName: "template-table" */ "@/document/template/TemplateTable.vue"
+              ),
+          },
+          {
+            path: "references",
+            name: "ReferenceTable",
+            meta: { title: "References", subMenu: "project", group: "incident" },
+            component: () =>
+              import(
+                /* webpackChunkName: "reference-table" */ "@/document/reference/ReferenceTable.vue"
+              ),
           },
           {
             path: "services",
@@ -288,11 +312,13 @@ export const protectedRoute = [
             component: () => import(/* webpackChunkName: "tag-table" */ "@/tag/Table.vue"),
           },
           {
-            path: "documents",
-            name: "DocumentTable",
-            meta: { title: "Documents", subMenu: "project", group: "knowledge" },
+            path: "runbooks",
+            name: "RunbookTable",
+            meta: { title: "Runbooks", subMenu: "project", group: "knowledge" },
             component: () =>
-              import(/* webpackChunkName: "document-table" */ "@/document/Table.vue"),
+              import(
+                /* webpackChunkName: "runbooks-table" */ "@/document/runbook/RunbookTable.vue"
+              ),
           },
           {
             path: "definitions",

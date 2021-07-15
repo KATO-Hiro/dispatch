@@ -10,11 +10,9 @@ const getDefaultSelectedState = () => {
     resource_type: null,
     resource_id: null,
     weblink: null,
-    terms: [],
     description: null,
-    incident_priorities: [],
-    incident_types: [],
     id: null,
+    filters: [],
     project: null,
     evergreen: null,
     evergreen_owner: null,
@@ -59,7 +57,7 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions(state.table.options)
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
     return DocumentApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)
@@ -68,7 +66,7 @@ const actions = {
       .catch(() => {
         commit("SET_TABLE_LOADING", false)
       })
-  }, 200),
+  }, 500),
   createEditShow({ commit }, document) {
     commit("SET_DIALOG_CREATE_EDIT", true)
     if (document) {
@@ -88,11 +86,13 @@ const actions = {
     commit("RESET_SELECTED")
   },
   save({ commit, dispatch }) {
+    commit("SET_SELECTED_LOADING", true)
     if (!state.selected.id) {
       return DocumentApi.create(state.selected)
         .then(function (resp) {
           dispatch("closeCreateEdit")
           dispatch("getAll")
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             { text: "Document created successfully.", type: "success" },
@@ -101,6 +101,7 @@ const actions = {
           return resp.data
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -113,6 +114,7 @@ const actions = {
     } else {
       return DocumentApi.update(state.selected.id, state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAll")
           commit(

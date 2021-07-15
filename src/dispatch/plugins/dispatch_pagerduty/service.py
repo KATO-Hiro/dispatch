@@ -7,16 +7,23 @@ def get_oncall_email(client, service: dict) -> str:
     escalation_policy = client.rget(f"/escalation_policies/{escalation_policy_id}")
     schedule_id = escalation_policy["escalation_rules"][0]["targets"][0]["id"]
 
-    oncalls = client.iter_all(
-        "oncalls",  # method
-        {
-            # "include[]": "users", # including users doesn't give us the contact details
-            "schedule_ids[]": [schedule_id],
-            "escalation_policy_ids[]": [escalation_policy_id],
-        },  # params
+    oncalls = list(
+        client.iter_all(
+            "oncalls",  # method
+            {
+                # "include[]": "users", # including users doesn't give us the contact details
+                "schedule_ids[]": [schedule_id],
+                "escalation_policy_ids[]": [escalation_policy_id],
+            },  # params
+        )
     )
 
-    user_id = list(oncalls)[0]["user"]["id"]
+    if len(oncalls):
+        user_id = list(oncalls)[0]["user"]["id"]
+    else:
+        raise Exception(
+            f"No users could be found for this pagerduty escalation policy ({escalation_policy_id}). Is there a schedule associated?"
+        )
     user = client.rget(f"/users/{user_id}")
 
     return user["email"]

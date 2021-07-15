@@ -13,6 +13,7 @@ const getDefaultSelectedState = () => {
     tactical_report_reminder: null,
     project: null,
     executive_report_reminder: null,
+    enabled: false,
     description: null,
     loading: false,
     default: false,
@@ -62,7 +63,7 @@ const actions = {
       .catch(() => {
         commit("SET_TABLE_LOADING", false)
       })
-  }, 200),
+  }, 500),
   createEditShow({ commit }, incidentPriority) {
     commit("SET_DIALOG_CREATE_EDIT", true)
     if (incidentPriority) {
@@ -82,9 +83,12 @@ const actions = {
     commit("RESET_SELECTED")
   },
   save({ commit, state, dispatch }) {
+    commit("SET_SELECTED_LOADING", true)
+
     if (!state.selected.id) {
       return IncidentPriorityApi.create(state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAll")
           commit(
@@ -94,6 +98,7 @@ const actions = {
           )
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -106,6 +111,7 @@ const actions = {
     } else {
       return IncidentPriorityApi.update(state.selected.id, state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAll")
           commit(
@@ -115,6 +121,7 @@ const actions = {
           )
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -154,6 +161,9 @@ const mutations = {
   updateField,
   SET_SELECTED(state, value) {
     state.selected = Object.assign(state.selected, value)
+  },
+  SET_SELECTED_LOADING(state, value) {
+    state.selected.loading = value
   },
   SET_TABLE_LOADING(state, value) {
     state.table.loading = value

@@ -15,6 +15,9 @@ class ParticipantRoleType(str, Enum):
     participant = "Participant"
     reporter = "Reporter"
 
+    def __str__(self) -> str:
+        return str.__str__(self)
+
 
 class ParticipantRole(Base):
     id = Column(Integer, primary_key=True)

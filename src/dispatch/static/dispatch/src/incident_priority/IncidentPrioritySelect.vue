@@ -12,7 +12,11 @@
       <template>
         <v-list-item-content>
           <v-list-item-title v-text="data.item.name" />
-          <v-list-item-subtitle v-text="data.item.description" />
+          <v-list-item-subtitle
+            style="width: 200px"
+            class="text-truncate"
+            v-text="data.item.description"
+          />
         </v-list-item-content>
       </template>
     </template>
@@ -70,12 +74,27 @@ export default {
 
       if (this.project) {
         filterOptions = {
+          ...filterOptions,
           filters: {
             project: [this.project],
           },
         }
-        filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions })
       }
+
+      let enabledFilter = [
+        {
+          model: "IncidentPriority",
+          field: "enabled",
+          op: "==",
+          value: "true",
+        },
+      ]
+
+      filterOptions = SearchUtils.createParametersFromTableOptions(
+        { ...filterOptions },
+        enabledFilter
+      )
+
       IncidentPriorityApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
         this.loading = false

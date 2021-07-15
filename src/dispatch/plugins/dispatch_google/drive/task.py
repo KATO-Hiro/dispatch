@@ -4,12 +4,13 @@
     :copyright: (c) 2019 by Netflix Inc., see AUTHORS for more
     :license: Apache, see LICENSE for more details.
 .. moduleauthor:: Kevin Glisson <kglisson@netflix.com>
+.. moduleauthor:: Marc Vilanova <mvilanova@netflix.com>
 """
 import re
 import logging
 from typing import Any, List, Dict
 
-from dispatch.task.models import TaskStatus
+from dispatch.task.enums import TaskStatus
 from dispatch.plugins.dispatch_google.config import GOOGLE_DOMAIN
 
 from .drive import get_file, list_comments
@@ -18,14 +19,14 @@ log = logging.getLogger(__name__)
 
 
 def get_assignees(content: str) -> List[str]:
-    """Gets assignees from comment."""
+    """Gets assignees from comment's content."""
     regex = r"[+@]([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)"
     matches = re.findall(regex, content)
     return list(matches)
 
 
-def parse_comment(content: str) -> Dict:
-    """Parses a comment into it's various parts."""
+def parse_comment_content(content: str) -> Dict:
+    """Parses a comment's content into its various parts."""
     assignees = get_assignees(content)
     return {"assignees": assignees}
 
@@ -46,7 +47,7 @@ def get_task_status(task: dict):
 
 def filter_comments(comments: List[Any]):
     """Filters comments for tasks."""
-    return [c for c in comments if parse_comment(c["content"])["assignees"]]
+    return [c for c in comments if parse_comment_content(c["content"])["assignees"]]
 
 
 def find_urls(text: str) -> List[str]:

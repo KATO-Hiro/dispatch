@@ -1,6 +1,6 @@
 import pytest
 
-from sqlalchemy_utils import create_database, database_exists, drop_database
+from sqlalchemy_utils import drop_database
 from starlette.testclient import TestClient
 from starlette.config import environ
 
@@ -22,9 +22,11 @@ environ["METRIC_PROVIDERS"] = ""  # TODO move this to the default
 environ["STATIC_DIR"] = ""  # we don't need static files for tests
 
 from dispatch import config
-from dispatch.database.core import Base, engine, SessionLocal
+from dispatch.database.manage import init_database
+from dispatch.database.core import engine, sessionmaker
 
 from .factories import (
+    OrganizationFactory,
     ConferenceFactory,
     ConversationFactory,
     DefinitionFactory,
@@ -38,7 +40,7 @@ from .factories import (
     ParticipantFactory,
     ParticipantRoleFactory,
     ProjectFactory,
-    RecommendationAccuracyFactory,
+    RecommendationMatchFactory,
     RecommendationFactory,
     ServiceFactory,
     ReportFactory,
@@ -82,14 +84,15 @@ def testapp():
 
 @pytest.fixture(scope="session", autouse=True)
 def db():
-    try:
-        if database_exists(str(config.SQLALCHEMY_DATABASE_URI)):
-            drop_database(str(config.SQLALCHEMY_DATABASE_URI))
-    except Exception:
-        pass
-    create_database(str(config.SQLALCHEMY_DATABASE_URI))
-    Base.metadata.create_all(engine)  # Create the tables.
-    _db = SessionLocal()
+    init_database(engine)
+    schema_engine = engine.execution_options(
+        schema_translate_map={
+            None: "dispatch_organization_default",
+            "dispatch_core": "dispatch_core",
+        }
+    )
+    session = sessionmaker(bind=schema_engine)
+    _db = session()
     yield _db
     drop_database(str(config.SQLALCHEMY_DATABASE_URI))
 
@@ -318,13 +321,18 @@ def participants(session):
 
 
 @pytest.fixture
+def organization(session):
+    return OrganizationFactory()
+
+
+@pytest.fixture
 def project(session):
     return ProjectFactory()
 
 
 @pytest.fixture
 def recommendation_accuracy(session):
-    return RecommendationAccuracyFactory()
+    return RecommendationMatchFactory()
 
 
 @pytest.fixture

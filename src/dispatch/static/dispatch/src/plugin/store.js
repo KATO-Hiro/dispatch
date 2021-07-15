@@ -10,7 +10,7 @@ const getDefaultSelectedState = () => {
     enabled: null,
     configuration: [],
     project: null,
-    plugin: null,
+    plugin_instance: null,
     loading: false,
   }
 }
@@ -57,7 +57,7 @@ const actions = {
       .catch(() => {
         commit("SET_TABLE_LOADING", false)
       })
-  }, 200),
+  }, 500),
   getAllInstances: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
     let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
@@ -69,7 +69,7 @@ const actions = {
       .catch(() => {
         commit("SET_TABLE_LOADING", false)
       })
-  }, 200),
+  }, 500),
   createEditShow({ commit }, plugin) {
     commit("SET_DIALOG_EDIT", true)
     if (plugin) {
@@ -81,9 +81,11 @@ const actions = {
     commit("RESET_SELECTED")
   },
   save({ commit, dispatch }) {
+    commit("SET_SELECTED_LOADING", true)
     if (!state.selected.id) {
       return PluginApi.createInstance(state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAllInstances")
           commit(
@@ -93,6 +95,7 @@ const actions = {
           )
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -105,6 +108,7 @@ const actions = {
     } else {
       return PluginApi.updateInstance(state.selected.id, state.selected)
         .then(() => {
+          commit("SET_SELECTED_LOADING", false)
           dispatch("closeCreateEdit")
           dispatch("getAllInstances")
           commit(
@@ -114,6 +118,7 @@ const actions = {
           )
         })
         .catch((err) => {
+          commit("SET_SELECTED_LOADING", false)
           commit(
             "notification_backend/addBeNotification",
             {
@@ -159,6 +164,9 @@ const mutations = {
   },
   SET_SELECTED(state, value) {
     state.selected = Object.assign(state.selected, value)
+  },
+  SET_SELECTED_LOADING(state, value) {
+    state.selected.loading = value
   },
   SET_TABLE_LOADING(state, value) {
     state.table.loading = value

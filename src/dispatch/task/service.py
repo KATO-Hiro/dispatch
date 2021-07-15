@@ -3,12 +3,15 @@ from typing import List, Optional
 
 from sqlalchemy import or_
 
+from dispatch.incident.models import Incident
 from dispatch.plugin import service as plugin_service
 from dispatch.event import service as event_service
 from dispatch.incident import flows as incident_flows
 from dispatch.incident.flows import incident_service
 from dispatch.ticket import service as ticket_service
-from .models import Task, TaskStatus, TaskUpdate, TaskCreate
+
+from .enums import TaskStatus
+from .models import Task, TaskUpdate, TaskCreate
 
 
 def get(*, db_session, task_id: int) -> Optional[Task]:
@@ -40,13 +43,15 @@ def get_all_by_incident_id_and_status(
     )
 
 
-def get_overdue_tasks(*, db_session) -> List[Optional[Task]]:
+def get_overdue_tasks(*, db_session, project_id: int) -> List[Optional[Task]]:
     """Returns all tasks that have not been resolved and are past due date."""
     # TODO ensure that we don't send reminders more than their interval
     return (
         db_session.query(Task)
+        .join(Incident)
         .filter(Task.status == TaskStatus.open)
         .filter(Task.reminders == True)  # noqa
+        .filter(Incident.project_id == project_id)
         .filter(Task.resolve_by < datetime.utcnow())
         .filter(
             or_(
@@ -121,7 +126,7 @@ def create(*, db_session, task_in: TaskCreate) -> Task:
     event_service.log(
         db_session=db_session,
         source="Dispatch Core App",
-        description="New incident task created",
+        description=f"New incident task created by {creator.individual.name}",
         details={"weblink": task.weblink},
         incident_id=incident.id,
     )
@@ -133,23 +138,22 @@ def create(*, db_session, task_in: TaskCreate) -> Task:
 
 def update(*, db_session, task: Task, task_in: TaskUpdate, sync_external: bool = True) -> Task:
     """Update an existing task."""
-    # ensure we add assignee as participant if they are not one already
-    assignees = []
-    for i in task_in.assignees:
-        assignees.append(
-            incident_flows.incident_add_or_reactivate_participant_flow(
-                db_session=db_session,
-                incident_id=task.incident.id,
-                user_email=i.individual.email,
+    # we add the assignees of the task to the incident if the status of the task is open
+    if task_in.status == TaskStatus.open:
+        assignees = []
+        for i in task_in.assignees:
+            assignees.append(
+                incident_flows.incident_add_or_reactivate_participant_flow(
+                    db_session=db_session,
+                    incident_id=task.incident.id,
+                    user_email=i.individual.email,
+                )
             )
-        )
+        task.assignees = assignees
 
-    task.assignees = assignees
-
-    # we add owner as a participant if they are not one already
+    # we add the owner of the task to the incident if the status of the task is open
     if task_in.owner:
-        # don't reactive participants if the tasks is already resolved
-        if task_in.status != TaskStatus.resolved:
+        if task_in.status == TaskStatus.open:
             task.owner = incident_flows.incident_add_or_reactivate_participant_flow(
                 db_session=db_session,
                 incident_id=task.incident.id,

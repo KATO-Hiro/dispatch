@@ -11,14 +11,16 @@ from collections import defaultdict
 from datetime import datetime
 
 from dispatch.database.core import SessionLocal
+from dispatch.incident.enums import IncidentStatus
 from dispatch.messaging.strings import (
     INCIDENT_TASK_REMINDER,
     INCIDENT_TASK_NEW_NOTIFICATION,
     INCIDENT_TASK_RESOLVED_NOTIFICATION,
 )
 from dispatch.plugin import service as plugin_service
-from dispatch.task.models import TaskStatus, TaskCreate, TaskUpdate
 from dispatch.task import service as task_service
+from dispatch.task.enums import TaskStatus
+from dispatch.task.models import TaskCreate, TaskUpdate
 
 
 log = logging.getLogger(__name__)
@@ -79,6 +81,7 @@ def create_reminder(db_session, assignee_email, tasks, contact_fullname, contact
 def send_task_notification(
     incident,
     message_template,
+    creator,
     assignees,
     description,
     weblink,
@@ -96,6 +99,7 @@ def send_task_notification(
         notification_text,
         message_template,
         notification_type,
+        task_creator=creator.individual.email,
         task_assignees=[x.individual.email for x in assignees],
         task_description=description,
         task_weblink=weblink,
@@ -111,7 +115,7 @@ def create_or_update_task(
     )
 
     if existing_task:
-        # save the status before we attempt to update the record
+        # we save the existing task status before we attempt to update the record
         existing_status = existing_task.status
         task = task_service.update(
             db_session=db_session,
@@ -122,17 +126,22 @@ def create_or_update_task(
 
         if notify:
             # determine if task was previously resolved
-            if task.status == TaskStatus.resolved.value:
-                if existing_status != TaskStatus.resolved.value:
+            if task.status == TaskStatus.resolved:
+                if existing_status != TaskStatus.resolved:
                     send_task_notification(
                         incident,
                         INCIDENT_TASK_RESOLVED_NOTIFICATION,
+                        task.creator,
                         task.assignees,
                         task.description,
                         task.weblink,
                         db_session,
                     )
     else:
+        # we don't attempt to create new tasks if the incident is currently closed
+        if incident.status == IncidentStatus.closed:
+            return
+
         task = task_service.create(
             db_session=db_session,
             task_in=TaskCreate(**task, incident=incident),
@@ -142,6 +151,7 @@ def create_or_update_task(
             send_task_notification(
                 incident,
                 INCIDENT_TASK_NEW_NOTIFICATION,
+                task.creator,
                 task.assignees,
                 task.description,
                 task.weblink,

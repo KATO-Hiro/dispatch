@@ -23,7 +23,7 @@ class Tag(Base, TimeStampMixin, ProjectMixin):
     discoverable = Column(Boolean, default=True)
 
     # Relationships
-    tag_type_id = Column(Integer, ForeignKey("tag_type.id"))
+    tag_type_id = Column(Integer, ForeignKey("tag_type.id"), nullable=False)
     tag_type = relationship("TagType", backref="tag")
 
     search_vector = Column(TSVectorType("name"))
@@ -31,7 +31,7 @@ class Tag(Base, TimeStampMixin, ProjectMixin):
 
 # Pydantic models
 class TagBase(DispatchBase):
-    name: str
+    name: Optional[str]
     source: Optional[str]
     uri: Optional[str]
     discoverable: Optional[bool] = True
@@ -39,13 +39,14 @@ class TagBase(DispatchBase):
 
 
 class TagCreate(TagBase):
+    id: Optional[int]
     tag_type: TagTypeCreate
     project: ProjectRead
 
 
 class TagUpdate(TagBase):
-    id: int
-    tag_type: TagTypeUpdate
+    id: Optional[int]
+    tag_type: Optional[TagTypeUpdate]
 
 
 class TagRead(TagBase):

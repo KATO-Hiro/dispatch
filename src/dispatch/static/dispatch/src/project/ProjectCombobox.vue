@@ -1,16 +1,18 @@
 <template>
   <v-combobox
-    v-model="project"
     :items="items"
-    item-text="name"
-    :search-input.sync="search"
-    hide-selected
     :label="label"
-    multiple
+    :loading="loading"
+    :search-input.sync="search"
+    @update:search-input="getFilteredData()"
     chips
     clearable
-    :loading="loading"
-    @update:search-input="getFilteredData({ q: $event })"
+    deletable-chips
+    hide-selected
+    item-text="name"
+    multiple
+    no-filter
+    v-model="project"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -27,7 +29,11 @@
       <template>
         <v-list-item-content>
           <v-list-item-title v-text="data.item.name" />
-          <v-list-item-subtitle v-text="data.item.description" />
+          <v-list-item-subtitle
+            style="width: 200px"
+            class="text-truncate"
+            v-text="data.item.description"
+          />
         </v-list-item-content>
       </template>
     </template>
@@ -42,8 +48,11 @@
 </template>
 
 <script>
-import ProjectApi from "@/project/api"
 import { cloneDeep, debounce } from "lodash"
+
+import SearchUtils from "@/search/utils"
+import ProjectApi from "@/project/api"
+
 export default {
   name: "ProjectComboBox",
   props: {
@@ -99,11 +108,19 @@ export default {
   methods: {
     loadMore() {
       this.numItems = this.numItems + 5
-      this.getFilteredData({ q: this.search, itemsPerPage: this.numItems })
+      this.fetchData()
     },
-    fetchData(filterOptions) {
+    fetchData() {
       this.error = null
       this.loading = "error"
+
+      let filterOptions = {
+        q: this.search,
+        itemsPerPage: this.numItems,
+      }
+
+      filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions })
+
       ProjectApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
         this.total = response.data.total
@@ -117,8 +134,8 @@ export default {
         this.loading = false
       })
     },
-    getFilteredData: debounce(function (options) {
-      this.fetchData(options)
+    getFilteredData: debounce(function () {
+      this.fetchData()
     }, 500),
   },
 }

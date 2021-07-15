@@ -59,7 +59,7 @@
                   <template v-slot:label>
                     <div>
                       Tracking Only
-                      <v-tooltip bottom>
+                      <v-tooltip max-width="250px" bottom>
                         <template v-slot:activator="{ on, attrs }">
                           <v-icon v-bind="attrs" v-on="on"> help_outline </v-icon>
                         </template>
@@ -161,6 +161,16 @@ export default {
 
     if (this.query.incident_priority) {
       this.incident_priority = { name: this.query.incident_priority }
+    }
+
+    if (this.query.tag) {
+      if (Array.isArray(this.query.tag)) {
+        this.tags = this.query.tag.map(function (t) {
+          return { name: t }
+        })
+      } else {
+        this.tags = [{ name: this.query.tag }]
+      }
     }
   },
 }

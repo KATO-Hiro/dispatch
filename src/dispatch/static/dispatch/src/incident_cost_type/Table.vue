@@ -2,9 +2,14 @@
   <v-layout wrap>
     <new-edit-sheet />
     <delete-dialog />
-    <div class="headline">Incident Cost Types</div>
-    <v-spacer />
-    <v-btn color="info" class="ml-2" @click="createEditShow()"> New </v-btn>
+    <v-row align="center" justify="space-between">
+      <v-col class="grow">
+        <settings-breadcrumbs v-model="project" />
+      </v-col>
+      <v-col class="shrink">
+        <v-btn color="info" class="mr-2" @click="createEditShow()"> New </v-btn>
+      </v-col>
+    </v-row>
     <v-flex xs12>
       <v-layout column>
         <v-flex>
@@ -40,7 +45,12 @@
                 {{ item.details }}
               </template>
               <template v-slot:item.created_at="{ item }">
-                {{ item.created_at | formatDate }}
+                <v-tooltip bottom>
+                  <template v-slot:activator="{ on, attrs }">
+                    <span v-bind="attrs" v-on="on">{{ item.created_at | formatRelativeDate }}</span>
+                  </template>
+                  <span>{{ item.created_at | formatDate }}</span>
+                </v-tooltip>
               </template>
               <template v-slot:item.data-table-actions="{ item }">
                 <v-menu bottom left>
@@ -70,14 +80,17 @@
 <script>
 import { mapFields } from "vuex-map-fields"
 import { mapActions } from "vuex"
+import SettingsBreadcrumbs from "@/components/SettingsBreadcrumbs.vue"
 import DeleteDialog from "@/incident_cost_type/DeleteDialog.vue"
 import NewEditSheet from "@/incident_cost_type/NewEditSheet.vue"
+
 export default {
   name: "IncidentCostTypeTable",
 
   components: {
     DeleteDialog,
     NewEditSheet,
+    SettingsBreadcrumbs,
   },
 
   data() {
@@ -123,9 +136,10 @@ export default {
     )
 
     this.$watch(
-      (vm) => [vm.q, vm.itemsPerPage, vm.sortBy, vm.descending],
+      (vm) => [vm.q, vm.itemsPerPage, vm.sortBy, vm.descending, vm.project],
       () => {
         this.page = 1
+        this.$router.push({ query: { project: this.project[0].name } })
         this.getAll()
       }
     )

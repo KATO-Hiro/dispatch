@@ -1,6 +1,5 @@
 <template>
   <div>
-    <new-edit-sheet />
     <v-data-table :headers="headers" :items="items" hide-default-footer>
       <template v-slot:item.name="{ item }">
         <a :href="item.weblink" target="_blank" style="text-decoration: none">
@@ -9,7 +8,7 @@
         </a>
       </template>
       <template v-slot:item.project.name="{ item }">
-        <v-chip color="orange" text-color="white">
+        <v-chip small :color="item.project.color" text-color="white">
           {{ item.project.name }}
         </v-chip>
       </template>
@@ -36,13 +35,10 @@
 
 <script>
 import { mapActions } from "vuex"
-import NewEditSheet from "@/document/NewEditSheet.vue"
 export default {
   name: "DocumentSummaryTable",
 
-  components: {
-    NewEditSheet,
-  },
+  components: {},
   data() {
     return {
       headers: [

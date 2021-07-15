@@ -1,15 +1,17 @@
 <template>
   <v-combobox
-    v-model="terms"
-    item-text="text"
     :items="items"
-    :search-input.sync="search"
-    hide-selected
     :label="label"
-    multiple
-    chips
     :loading="loading"
-    @update:search-input="getFilteredData({ q: $event })"
+    :search-input.sync="search"
+    @update:search-input="getFilteredData()"
+    chips
+    deletable-chips
+    hide-selected
+    item-text="text"
+    multiple
+    no-filter
+    v-model="terms"
   >
     <template v-slot:no-data>
       <v-list-item>
@@ -83,12 +85,17 @@ export default {
   },
 
   methods: {
+    loadMore() {
+      this.numItems = this.numItems + 5
+      this.fetchData()
+    },
     fetchData() {
       this.error = null
       this.loading = "error"
 
       let filterOptions = {
         q: this.search,
+        itemsPerPage: this.numItems,
         filters: {
           project: [this.project],
         },
@@ -98,11 +105,18 @@ export default {
 
       TermApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
+        this.total = response.data.total
+
+        if (this.items.length < this.total) {
+          this.more = true
+        } else {
+          this.more = false
+        }
         this.loading = false
       })
     },
-    getFilteredData: debounce(function (options) {
-      this.fetchData(options)
+    getFilteredData: debounce(function () {
+      this.fetchData()
     }, 500),
   },
 }

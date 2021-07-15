@@ -5,13 +5,14 @@ from typing import List
 
 from fastapi import Depends, Query
 
-from sqlalchemy import and_, not_, orm, func, desc
+from sqlalchemy import or_, orm, func, desc
 from sqlalchemy_filters import apply_pagination, apply_sort, apply_filters
 
+
 from dispatch.auth.models import DispatchUser
-from dispatch.auth.service import get_current_user
-from dispatch.common.utils.composite_search import CompositeSearch
-from dispatch.enums import Visibility
+from dispatch.auth.service import get_current_user, get_current_role
+from dispatch.search.fulltext.composite_search import CompositeSearch
+from dispatch.enums import UserRoles, Visibility
 from dispatch.feedback.models import Feedback
 from dispatch.task.models import Task
 from dispatch.project.models import Project
@@ -21,58 +22,73 @@ from dispatch.incident_type.models import IncidentType
 from dispatch.individual.models import IndividualContact
 from dispatch.participant.models import Participant
 
-from .core import Base, get_class_by_tablename, get_model_name_by_tablename, get_db
+
+from .core import (
+    Base,
+    get_class_by_tablename,
+    get_model_name_by_tablename,
+    get_db,
+)
 
 
 log = logging.getLogger(__file__)
 
 
-def restricted_incident_filter(query: orm.Query, current_user: DispatchUser):
+def restricted_incident_filter(query: orm.Query, current_user: DispatchUser, role: UserRoles):
     """Adds additional incident filters to query (usually for permissions)."""
-    return (
-        query.join(Participant, Incident.id == Participant.incident_id)
-        .join(IndividualContact)
-        .filter(
-            not_(
-                and_(
-                    Incident.visibility == Visibility.restricted.value,
-                    IndividualContact.email != current_user.email,
+    if role != UserRoles.owner:
+        # We don't allow users that are not owners to see restricted incidents
+        query = (
+            query.join(Participant, Incident.id == Participant.incident_id)
+            .join(IndividualContact)
+            .filter(
+                or_(
+                    Incident.visibility == Visibility.open.value,
+                    IndividualContact.email == current_user.email,
                 )
             )
         )
-    )
+    return query.distinct()
 
 
 def restricted_incident_type_filter(query: orm.Query, current_user: DispatchUser):
-    """Adds additional incident type filters to query (usually for permisions)."""
+    """Adds additional incident type filters to query (usually for permissions)."""
     if current_user:
-        query = query.filter(IncidentType.visibility == Visibility.open.value)
+        query = query.filter(IncidentType.visibility == Visibility.open)
     return query
 
 
-def apply_model_specific_filters(model: Base, query: orm.Query, current_user: DispatchUser):
+def apply_model_specific_filters(
+    model: Base, query: orm.Query, current_user: DispatchUser, role: UserRoles
+):
     """Applies any model specific filter as it pertains to the given user."""
     model_map = {
         Incident: [restricted_incident_filter],
-        IncidentType: [restricted_incident_type_filter],
+        # IncidentType: [restricted_incident_type_filter],
     }
 
     filters = model_map.get(model, [])
 
     for f in filters:
-        query = f(query, current_user)
+        query = f(query, current_user, role)
 
     return query
 
 
 def apply_model_specific_joins(model: Base, query: orm.query):
     """Applies any model specific implicity joins."""
-    model_map = {Feedback: [Incident, Project], Task: [Incident, Project], PluginInstance: [Plugin]}
+    model_map = {
+        Feedback: [(Incident, False), (Project, False)],
+        Task: [(Incident, False), (Project, False)],
+        PluginInstance: [(Plugin, False)],
+        Incident: [(Incident.tags, True), (Incident.terms, True)],
+        DispatchUser: [(DispatchUser.organizations, True)],
+    }
 
     joined_models = model_map.get(model, [])
 
-    for m in joined_models:
-        query = query.join(m)
+    for model, is_outer in joined_models:
+        query = query.join(model, isouter=is_outer)
 
     return query
 
@@ -97,21 +113,20 @@ def composite_search(*, db_session, query_str: str, models: List[Base], current_
     return s.search(query=query)
 
 
-def search(*, db_session, search_query: str, model: str, sort=False):
+def search(*, query_str: str, query: Query, model: str, sort=False):
     """Perform a search based on the query."""
     search_model = get_class_by_tablename(model)
-    query = db_session.query(search_model)
 
-    if not search_query.strip():
+    if not query_str.strip():
         return query
 
     vector = search_model.search_vector
 
-    query = query.filter(vector.op("@@")(func.tsq_parse(search_query)))
+    query = query.filter(vector.op("@@")(func.tsq_parse(query_str)))
     if sort:
-        query = query.order_by(desc(func.ts_rank_cd(vector, func.tsq_parse(search_query))))
+        query = query.order_by(desc(func.ts_rank_cd(vector, func.tsq_parse(query_str))))
 
-    return query.params(term=search_query)
+    return query.params(term=query_str)
 
 
 def create_sort_spec(model, sort_by, descending):
@@ -152,6 +167,7 @@ def common_parameters(
     sort_by: List[str] = Query([], alias="sortBy[]"),
     descending: List[bool] = Query([], alias="descending[]"),
     current_user: DispatchUser = Depends(get_current_user),
+    role: UserRoles = Depends(get_current_role),
 ):
     if filter_spec:
         filter_spec = json.loads(filter_spec)
@@ -165,6 +181,7 @@ def common_parameters(
         "sort_by": sort_by,
         "descending": descending,
         "current_user": current_user,
+        "role": role,
     }
 
 
@@ -178,6 +195,7 @@ def search_filter_sort_paginate(
     sort_by: List[str] = None,
     descending: List[bool] = None,
     current_user: DispatchUser = None,
+    role: UserRoles = UserRoles.member,
 ):
     """Common functionality for searching, filtering, sorting, and pagination."""
     model_cls = get_class_by_tablename(model)
@@ -187,11 +205,14 @@ def search_filter_sort_paginate(
     query = apply_model_specific_joins(model_cls, query)
 
     if query_str:
-        sort = False if sort_spec else True
-        query = search(db_session=db_session, search_query=query_str, model=model, sort=sort)
+        sort = False if sort_by else True
+        query = search(query_str=query_str, query=query, model=model, sort=sort)
 
-    query = apply_model_specific_filters(model_cls, query, current_user)
-    query = apply_filters(query, filter_spec)
+    query = apply_model_specific_filters(model_cls, query, current_user, role)
+
+    if filter_spec:
+        query = apply_filters(query, filter_spec)
+
     query = apply_sort(query, sort_spec)
 
     if items_per_page == -1:

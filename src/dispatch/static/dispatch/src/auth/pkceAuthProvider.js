@@ -18,6 +18,7 @@ function login(to, from, next) {
   const openIdConnectUrl =
     process.env.VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL
   const scope = "openid profile email"
+  const useIdToken = process.env.VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN
 
   const notifier = new AuthorizationNotifier()
 
@@ -72,9 +73,13 @@ function login(to, from, next) {
           .performTokenRequest(cfg, req)
           .then((response) => {
             // Redirect to the uri in session storage and then delete it from storage
-            store.dispatch("auth/login", {
-              token: response.accessToken,
-              redirectUri: localStorage.getItem("redirect_uri"),
+            let token = response.accessToken
+            if (useIdToken) {
+              token = response.idToken
+            }
+            store.commit("auth/SET_USER_LOGIN", token)
+            store.dispatch("auth/loginRedirect", localStorage.getItem("redirect_uri")).then(() => {
+              store.dispatch("auth/createExpirationCheck")
             })
             localStorage.removeItem("redirect_uri")
           })

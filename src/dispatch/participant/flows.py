@@ -1,13 +1,12 @@
 import logging
 
 from dispatch.database.core import SessionLocal
-from dispatch.incident.models import Incident
 from dispatch.event import service as event_service
+from dispatch.incident.models import Incident
 from dispatch.individual import service as individual_service
 from dispatch.participant_role import service as participant_role_service
 from dispatch.participant_role.models import ParticipantRoleType, ParticipantRoleCreate
-from dispatch.service.models import Service
-from dispatch.plugin import service as plugin_service
+from dispatch.service import service as service_service
 
 from .service import get_or_create, get_by_incident_id_and_email
 
@@ -19,8 +18,8 @@ def add_participant(
     user_email: str,
     incident: Incident,
     db_session: SessionLocal,
-    service: Service = None,
-    role: ParticipantRoleType = None,
+    service_id: int = None,
+    role: ParticipantRoleType = ParticipantRoleType.participant,
 ):
     """Adds a participant."""
     # We get or create a new individual
@@ -28,19 +27,13 @@ def add_participant(
         db_session=db_session, incident=incident, email=user_email
     )
 
-    # We create a role for the participant
-    participant_role_in = ParticipantRoleCreate(role=role)
-
-    participant_role = participant_role_service.create(
-        db_session=db_session, participant_role_in=participant_role_in
-    )
-
     # We get or create a new participant
+    participant_role = ParticipantRoleCreate(role=role)
     participant = get_or_create(
         db_session=db_session,
         incident_id=incident.id,
         individual_id=individual.id,
-        service=service,
+        service_id=service_id,
         participant_roles=[participant_role],
     )
 
@@ -48,6 +41,7 @@ def add_participant(
     incident.participants.append(participant)
 
     # We add and commit the changes
+    db_session.add(participant)
     db_session.add(individual)
     db_session.add(incident)
     db_session.commit()
@@ -64,29 +58,42 @@ def add_participant(
 
 def remove_participant(user_email: str, incident: Incident, db_session: SessionLocal):
     """Removes a participant."""
-    # We get information about the individual
-    contact_plugin = plugin_service.get_active_instance(
-        db_session=db_session, project_id=incident.project.id, plugin_type="contact"
-    )
-    individual_info = contact_plugin.instance.get(user_email)
-    individual_fullname = individual_info["fullname"]
+    inactivated = inactivate_participant(user_email, incident, db_session)
 
-    log.debug(f"Removing {individual_fullname} from incident {incident.name}...")
+    if inactivated:
+        participant = get_by_incident_id_and_email(
+            db_session=db_session, incident_id=incident.id, email=user_email
+        )
 
+        log.debug(f"Removing {participant.individual.name} from {incident.name} incident...")
+
+        participant.service = None
+
+        db_session.add(participant)
+        db_session.commit()
+
+        event_service.log(
+            db_session=db_session,
+            source="Dispatch Core App",
+            description=f"{participant.individual.name} has been removed",
+            incident_id=incident.id,
+        )
+
+
+def inactivate_participant(user_email: str, incident: Incident, db_session: SessionLocal):
+    """Inactivates a participant."""
     participant = get_by_incident_id_and_email(
         db_session=db_session, incident_id=incident.id, email=user_email
     )
 
     if not participant:
         log.debug(
-            f"Can't remove {individual_fullname}. They're not an active participant of incident {incident.name}."
+            f"Can't inactivate participant with {user_email} email. They're not a participant of {incident.name} incident."
         )
         return False
 
-    # We mark the participant as inactive
-    participant.is_active = False
+    log.debug(f"Inactivating {participant.individual.name} from {incident.name} incident...")
 
-    # We make the participant renounce to their active roles
     participant_active_roles = participant_role_service.get_all_active_roles(
         db_session=db_session, participant_id=participant.id
     )
@@ -95,60 +102,52 @@ def remove_participant(user_email: str, incident: Incident, db_session: SessionL
             db_session=db_session, participant_role=participant_active_role
         )
 
-    # We add and commit the changes
-    db_session.add(participant)
-    db_session.commit()
-
     event_service.log(
         db_session=db_session,
         source="Dispatch Core App",
-        description=f"{participant.individual.name} removed from incident",
+        description=f"{participant.individual.name} has been inactivated",
         incident_id=incident.id,
     )
 
     return True
 
 
-def reactivate_participant(user_email: str, incident: Incident, db_session: SessionLocal):
+def reactivate_participant(
+    user_email: str, incident: Incident, db_session: SessionLocal, service_id: int = None
+):
     """Reactivates a participant."""
-
-    # We get information about the individual
-    contact_plugin = plugin_service.get_active_instance(
-        db_session=db_session, project_id=incident.project.id, plugin_type="contact"
-    )
-    individual_info = contact_plugin.instance.get(user_email)
-    individual_fullname = individual_info["fullname"]
-
-    log.debug(f"Reactivating {individual_fullname} on incident {incident.name}...")
-
     participant = get_by_incident_id_and_email(
         db_session=db_session, incident_id=incident.id, email=user_email
     )
 
     if not participant:
-        log.debug(
-            f"{individual_fullname} is not an inactive participant of incident {incident.name}."
-        )
+        log.debug(f"{user_email} is not an inactive participant of {incident.name} incident.")
         return False
 
-    # We mark the participant as active
-    participant.is_active = True
+    log.debug(f"Reactivating {participant.individual.name} on {incident.name} incident...")
 
-    # We create a role for the participant
-    participant_role_in = ParticipantRoleCreate(role=ParticipantRoleType.participant)
+    # we get the last active role
+    participant_role = participant_role_service.get_last_active_role(
+        db_session=db_session, participant_id=participant.id
+    )
+    # we create a new role based on the last active role
+    participant_role_in = ParticipantRoleCreate(role=participant_role.role)
     participant_role = participant_role_service.create(
         db_session=db_session, participant_role_in=participant_role_in
     )
     participant.participant_roles.append(participant_role)
 
-    # We add and commit the changes
+    if service_id:
+        service = service_service.get(db_session=db_session, service_id=service_id)
+        participant.service = service
+
     db_session.add(participant)
     db_session.commit()
 
     event_service.log(
         db_session=db_session,
         source="Dispatch Core App",
-        description=f"{individual_fullname} reactivated",
+        description=f"{participant.individual.name} has been reactivated",
         incident_id=incident.id,
     )
 

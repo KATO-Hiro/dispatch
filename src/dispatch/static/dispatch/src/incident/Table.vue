@@ -39,7 +39,7 @@
               show-select
             >
               <template v-slot:item.project.name="{ item }">
-                <v-chip color="orange" text-color="white">
+                <v-chip small :color="item.project.color" text-color="white">
                   {{ item.project.name }}
                 </v-chip>
               </template>
@@ -171,7 +171,9 @@ export default {
       "table.options.filters.incident_type",
       "table.options.filters.incident_priority",
       "table.options.filters.status",
+      "table.options.filters.reported_at",
       "table.options.filters.tag",
+      "table.options.filters.tag_type",
       "table.options.filters.project",
       "table.options.descending",
       "table.loading",
@@ -211,8 +213,11 @@ export default {
         vm.descending,
         vm.commander,
         vm.reporter,
+        vm.reported_at.start,
+        vm.reported_at.end,
         vm.incident_type,
         vm.incident_priority,
+        vm.tag_type,
         vm.status,
         vm.tag,
         vm.project,

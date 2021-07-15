@@ -8,7 +8,7 @@ from jose import jwt
 from typing import Optional
 from pydantic import validator
 
-from sqlalchemy import Column, String, Binary, Integer
+from sqlalchemy import Column, String, LargeBinary, Integer
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql.schema import ForeignKey
 from sqlalchemy_utils import TSVectorType
@@ -48,9 +48,11 @@ def hash_password(password: str):
 
 
 class DispatchUser(Base, TimeStampMixin):
+    __table_args__ = {"schema": "dispatch_core"}
+
     id = Column(Integer, primary_key=True)
     email = Column(String, unique=True)
-    password = Column(Binary, nullable=False)
+    password = Column(LargeBinary, nullable=False)
 
     search_vector = Column(TSVectorType("email", weights={"email": "A"}))
 
@@ -64,34 +66,35 @@ class DispatchUser(Base, TimeStampMixin):
         data = {
             "exp": exp,
             "email": self.email,
-            "projects": [UserProject.from_orm(p).dict() for p in self.projects],
-            "organizations": [UserOrganization.from_orm(o).dict() for o in self.organizations],
         }
         return jwt.encode(data, DISPATCH_JWT_SECRET, algorithm=DISPATCH_JWT_ALG)
 
-    def get_project_role(self, project_name):
-        """Gets the users role for a given project."""
-        for p in self.projects:
-            if p.name == project_name:
-                return p.role
+    def get_organization_role(self, organization_name):
+        """Gets the users role for a given organization."""
+        for o in self.organizations:
+            if o.organization.name == organization_name:
+                return o.role
 
 
 class DispatchUserOrganization(Base, TimeStampMixin):
-    id = Column("id", Integer, primary_key=True)
-    dispatch_user_id = Column(Integer, ForeignKey("dispatch_user.id"))
-    organization_id = Column(Integer, ForeignKey("organization.id"))
-    organization = relationship(Organization)
-    role = Column(String)
+    __table_args__ = {"schema": "dispatch_core"}
+    dispatch_user_id = Column(Integer, ForeignKey(DispatchUser.id), primary_key=True)
     dispatch_user = relationship(DispatchUser, backref="organizations")
+
+    organization_id = Column(Integer, ForeignKey(Organization.id), primary_key=True)
+    organization = relationship(Organization, backref="users")
+
+    role = Column(String, default=UserRoles.member)
 
 
 class DispatchUserProject(Base, TimeStampMixin):
-    id = Column("id", Integer, primary_key=True)
-    dispatch_user_id = Column(Integer, ForeignKey("dispatch_user.id"))
-    project_id = Column(Integer, ForeignKey("project.id"))
-    project = relationship(Project)
-    role = Column(String, nullable=False, default=UserRoles.member)
+    dispatch_user_id = Column(Integer, ForeignKey(DispatchUser.id), primary_key=True)
     dispatch_user = relationship(DispatchUser, backref="projects")
+
+    project_id = Column(Integer, ForeignKey(Project.id), primary_key=True)
+    project = relationship(Project, backref="users")
+
+    role = Column(String, nullable=False, default=UserRoles.member)
 
 
 class UserProject(DispatchBase):
@@ -109,7 +112,6 @@ class UserOrganization(DispatchBase):
 class UserBase(DispatchBase):
     email: str
     projects: Optional[List[UserProject]] = []
-    organizations: Optional[List[UserOrganization]] = []
 
     @validator("email")
     def email_required(cls, v):
@@ -144,11 +146,15 @@ class UserLoginResponse(DispatchBase):
 
 class UserRead(UserBase):
     id: int
+    role: Optional[str]
 
 
 class UserUpdate(DispatchBase):
     id: int
     password: Optional[str]
+    projects: Optional[List[UserProject]]
+    organizations: Optional[List[UserOrganization]]
+    role: Optional[str]
 
     @validator("password", pre=True, always=True)
     def hash(cls, v):

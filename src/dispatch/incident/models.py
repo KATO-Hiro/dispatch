@@ -18,11 +18,11 @@ from sqlalchemy.orm import relationship
 from sqlalchemy_utils import TSVectorType
 
 from dispatch.config import (
-    INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT,
-    INCIDENT_RESOURCE_INVESTIGATION_DOCUMENT,
     INCIDENT_RESOURCE_NOTIFICATIONS_GROUP,
     INCIDENT_RESOURCE_TACTICAL_GROUP,
 )
+
+from dispatch.enums import DocumentResourceTypes
 from dispatch.conference.models import ConferenceRead
 from dispatch.conversation.models import ConversationRead
 from dispatch.database.core import Base
@@ -36,6 +36,7 @@ from dispatch.incident_priority.models import (
     IncidentPriorityRead,
 )
 from dispatch.incident_type.models import IncidentTypeCreate, IncidentTypeRead, IncidentTypeBase
+from dispatch.individual.models import IndividualContactCreate
 from dispatch.models import DispatchBase, ProjectMixin, TimeStampMixin
 from dispatch.participant.models import Participant, ParticipantRead, ParticipantUpdate
 from dispatch.participant_role.models import ParticipantRole, ParticipantRoleType
@@ -72,8 +73,8 @@ class Incident(Base, TimeStampMixin, ProjectMixin):
     name = Column(String)
     title = Column(String, nullable=False)
     description = Column(String, nullable=False)
-    status = Column(String, default=IncidentStatus.active.value)
-    visibility = Column(String, default=Visibility.open)
+    status = Column(String, default=IncidentStatus.active)
+    visibility = Column(String, default=Visibility.open, nullable=False)
 
     # auto generated
     reported_at = Column(DateTime, default=datetime.utcnow)
@@ -88,44 +89,48 @@ class Incident(Base, TimeStampMixin, ProjectMixin):
 
     @hybrid_property
     def commander(self):
+        commander = None
         if self.participants:
+            most_recent_assumed_at = self.created_at
             for p in self.participants:
                 for pr in p.participant_roles:
-                    if (
-                        pr.role == ParticipantRoleType.incident_commander.value
-                        and pr.renounced_at  # noqa
-                        is None  # Column renounced_at will be null for the current incident commander
-                    ):
-                        return p
+                    if pr.role == ParticipantRoleType.incident_commander:
+                        if pr.assumed_at > most_recent_assumed_at:
+                            most_recent_assumed_at = pr.assumed_at
+                            commander = p
+        return commander
 
     @commander.expression
     def commander(cls):
         return (
             select([Participant])
             .where(Participant.incident_id == cls.id)
-            .where(ParticipantRole.role == ParticipantRoleType.incident_commander.value)
-            .where(ParticipantRole.renounced_at == None)  # noqa
+            .where(ParticipantRole.role == ParticipantRoleType.incident_commander)
+            .order_by(ParticipantRole.assumed_at.desc())
+            .first()
         )
 
     @hybrid_property
     def reporter(self):
+        reporter = None
         if self.participants:
+            most_recent_assumed_at = self.created_at
             for p in self.participants:
                 for pr in p.participant_roles:
-                    if (
-                        pr.role == ParticipantRoleType.reporter.value
-                        and pr.renounced_at  # noqa
-                        is None  # Column renounced_at will be null for the current reporter
-                    ):
-                        return p
+                    if pr.role == ParticipantRoleType.reporter:
+                        if pr.assumed_at > most_recent_assumed_at:
+                            most_recent_assumed_at = pr.assumed_at
+                            reporter = p
+        return reporter
 
     @reporter.expression
     def reporter(cls):
         return (
             select([Participant])
             .where(Participant.incident_id == cls.id)
-            .where(ParticipantRole.role == ParticipantRoleType.reporter.value)
-            .where(ParticipantRole.renounced_at == None)  # noqa
+            .where(ParticipantRole.role == ParticipantRoleType.reporter)
+            .order_by(ParticipantRole.assumed_at.desc())
+            .first()
         )
 
     @hybrid_property
@@ -146,14 +151,14 @@ class Incident(Base, TimeStampMixin, ProjectMixin):
     def incident_document(self):
         if self.documents:
             for d in self.documents:
-                if d.resource_type == INCIDENT_RESOURCE_INVESTIGATION_DOCUMENT:
+                if d.resource_type == DocumentResourceTypes.incident:
                     return d
 
     @hybrid_property
     def incident_review_document(self):
         if self.documents:
             for d in self.documents:
-                if d.resource_type == INCIDENT_RESOURCE_INCIDENT_REVIEW_DOCUMENT:
+                if d.resource_type == DocumentResourceTypes.review:
                     return d
 
     @hybrid_property
@@ -234,9 +239,9 @@ class Incident(Base, TimeStampMixin, ProjectMixin):
     storage = relationship(
         "Storage", uselist=False, backref="incident", cascade="all, delete-orphan"
     )
-    tags = relationship("Tag", secondary=assoc_incident_tags, backref="incidents", lazy="joined")
+    tags = relationship("Tag", secondary=assoc_incident_tags, backref="incidents")
     tasks = relationship("Task", backref="incident", cascade="all, delete-orphan")
-    terms = relationship("Term", secondary=assoc_incident_terms, backref="incidents")
+    terms = relationship("Term", secondary=assoc_incident_terms, backref="incidents", lazy="joined")
     ticket = relationship("Ticket", uselist=False, backref="incident", cascade="all, delete-orphan")
     workflow_instances = relationship(
         "WorkflowInstance", backref="incident", cascade="all, delete-orphan"
@@ -283,6 +288,7 @@ class IncidentReadNested(IncidentBase):
 class IncidentCreate(IncidentBase):
     incident_priority: Optional[IncidentPriorityCreate]
     incident_type: Optional[IncidentTypeCreate]
+    reporter: Optional[ParticipantUpdate]
     tags: Optional[List[Any]] = []  # any until we figure out circular imports
     project: ProjectRead
 

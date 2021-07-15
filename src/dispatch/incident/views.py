@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import List
 
 import calendar
@@ -15,12 +16,14 @@ from dispatch.auth.permissions import (
     IncidentViewPermission,
 )
 
+from dispatch.models import IndividualReadNested
 from dispatch.auth.models import DispatchUser
 from dispatch.auth.service import get_current_user
 from dispatch.common.utils.views import create_pydantic_include
 from dispatch.database.core import get_db
 from dispatch.database.service import common_parameters, search_filter_sort_paginate
 from dispatch.incident.enums import IncidentStatus
+from dispatch.participant.models import ParticipantUpdate
 from dispatch.participant_role.models import ParticipantRoleType
 from dispatch.report import flows as report_flows
 from dispatch.report.models import TacticalReportCreate, ExecutiveReportCreate
@@ -37,6 +40,8 @@ from .metrics import make_forecast, create_incident_metric_query
 from .models import Incident, IncidentCreate, IncidentPagination, IncidentRead, IncidentUpdate
 from .service import create, delete, get, update
 
+log = logging.getLogger(__name__)
+
 
 router = APIRouter()
 
@@ -49,7 +54,7 @@ def get_current_incident(*, db_session: Session = Depends(get_db), request: Requ
     return incident
 
 
-@router.get("/", summary="Retrieve a list of all incidents.")
+@router.get("", summary="Retrieve a list of all incidents.")
 def get_incidents(
     *,
     common: dict = Depends(common_parameters),
@@ -91,10 +96,11 @@ def get_incident(
     return current_incident
 
 
-@router.post("/", response_model=IncidentRead, summary="Create a new incident.")
+@router.post("", response_model=IncidentRead, summary="Create a new incident.")
 def create_incident(
     *,
     db_session: Session = Depends(get_db),
+    organization: str,
     incident_in: IncidentCreate,
     current_user: DispatchUser = Depends(get_current_user),
     background_tasks: BackgroundTasks,
@@ -102,16 +108,28 @@ def create_incident(
     """
     Create a new incident.
     """
-    incident = create(
-        db_session=db_session, reporter_email=current_user.email, **incident_in.dict()
-    )
+    if not incident_in.reporter:
+        incident_in.reporter = ParticipantUpdate(
+            individual=IndividualReadNested(email=current_user.email)
+        )
+    try:
+        incident = create(db_session=db_session, **incident_in.dict())
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(status_code=400, detail=str(e))
 
-    if incident.status == IncidentStatus.stable.value:
-        background_tasks.add_task(incident_create_stable_flow, incident_id=incident.id)
-    elif incident.status == IncidentStatus.closed.value:
-        background_tasks.add_task(incident_create_closed_flow, incident_id=incident.id)
+    if incident.status == IncidentStatus.stable:
+        background_tasks.add_task(
+            incident_create_stable_flow, incident_id=incident.id, organization_slug=organization
+        )
+    elif incident.status == IncidentStatus.closed:
+        background_tasks.add_task(
+            incident_create_closed_flow, incident_id=incident.id, organization_slug=organization
+        )
     else:
-        background_tasks.add_task(incident_create_flow, incident_id=incident.id)
+        background_tasks.add_task(
+            incident_create_flow, incident_id=incident.id, organization_slug=organization
+        )
 
     return incident
 
@@ -126,6 +144,7 @@ def update_incident(
     *,
     db_session: Session = Depends(get_db),
     current_incident: Incident = Depends(get_current_incident),
+    organization: str,
     incident_in: IncidentUpdate,
     current_user: DispatchUser = Depends(get_current_user),
     background_tasks: BackgroundTasks,
@@ -136,13 +155,18 @@ def update_incident(
     previous_incident = IncidentRead.from_orm(current_incident)
 
     # NOTE: Order matters we have to get the previous state for change detection
-    incident = update(db_session=db_session, incident=current_incident, incident_in=incident_in)
+    try:
+        incident = update(db_session=db_session, incident=current_incident, incident_in=incident_in)
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(status_code=400, detail=str(e))
 
     background_tasks.add_task(
         incident_update_flow,
         user_email=current_user.email,
         incident_id=incident.id,
         previous_incident=previous_incident,
+        organization_slug=organization,
     )
 
     # assign commander
@@ -151,7 +175,8 @@ def update_incident(
         current_user.email,
         incident_id=incident.id,
         assignee_email=incident_in.commander.individual.email,
-        assignee_role=ParticipantRoleType.incident_commander.value,
+        assignee_role=ParticipantRoleType.incident_commander,
+        organization_slug=organization,
     )
 
     # assign reporter
@@ -160,7 +185,8 @@ def update_incident(
         current_user.email,
         incident_id=incident.id,
         assignee_email=incident_in.reporter.individual.email,
-        assignee_role=ParticipantRoleType.reporter.value,
+        assignee_role=ParticipantRoleType.reporter,
+        organization_slug=organization,
     )
 
     return incident
@@ -174,6 +200,7 @@ def update_incident(
 def join_incident(
     *,
     db_session: Session = Depends(get_db),
+    organization: str,
     current_incident: Incident = Depends(get_current_incident),
     current_user: DispatchUser = Depends(get_current_user),
     background_tasks: BackgroundTasks,
@@ -185,6 +212,7 @@ def join_incident(
         incident_add_or_reactivate_participant_flow,
         current_user.email,
         incident_id=current_incident.id,
+        organization_slug=organization,
     )
 
 
@@ -196,6 +224,7 @@ def join_incident(
 def create_tactical_report(
     *,
     db_session: Session = Depends(get_db),
+    organization: str,
     tactical_report_in: TacticalReportCreate,
     current_user: DispatchUser = Depends(get_current_user),
     current_incident: Incident = Depends(get_current_incident),
@@ -209,6 +238,7 @@ def create_tactical_report(
         user_email=current_user.email,
         incident_id=current_incident.id,
         tactical_report_in=tactical_report_in,
+        organization_slug=organization,
     )
 
 
@@ -220,6 +250,7 @@ def create_tactical_report(
 def create_executive_report(
     *,
     db_session: Session = Depends(get_db),
+    organization: str,
     current_incident: Incident = Depends(get_current_incident),
     executive_report_in: ExecutiveReportCreate,
     current_user: DispatchUser = Depends(get_current_user),
@@ -233,6 +264,7 @@ def create_executive_report(
         user_email=current_user.email,
         incident_id=current_incident.id,
         executive_report_in=executive_report_in,
+        organization_slug=organization,
     )
 
 

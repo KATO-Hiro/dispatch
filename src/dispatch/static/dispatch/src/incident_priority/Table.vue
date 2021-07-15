@@ -1,9 +1,14 @@
 <template>
   <v-layout wrap>
     <new-edit-sheet />
-    <div class="headline">Incident Priorities</div>
-    <v-spacer />
-    <v-btn color="info" class="mb-2" @click="createEditShow()"> New </v-btn>
+    <v-row align="center" justify="space-between">
+      <v-col class="grow">
+        <settings-breadcrumbs v-model="project" :organization="organization" />
+      </v-col>
+      <v-col class="shrink">
+        <v-btn color="info" class="mr-2" @click="createEditShow()"> New </v-btn>
+      </v-col>
+    </v-row>
     <v-flex xs12>
       <v-layout column>
         <v-flex>
@@ -32,6 +37,12 @@
               <template v-slot:item.page_commander="{ item }">
                 <v-simple-checkbox v-model="item.page_commander" disabled />
               </template>
+              <template v-slot:item.default="{ item }">
+                <v-simple-checkbox v-model="item.default" disabled />
+              </template>
+              <template v-slot:item.enabled="{ item }">
+                <v-simple-checkbox v-model="item.enabled" disabled />
+              </template>
               <template v-slot:item.data-table-actions="{ item }">
                 <v-menu bottom left>
                   <template v-slot:activator="{ on }">
@@ -57,12 +68,16 @@
 <script>
 import { mapFields } from "vuex-map-fields"
 import { mapActions } from "vuex"
+
+import SettingsBreadcrumbs from "@/components/SettingsBreadcrumbs.vue"
 import NewEditSheet from "@/incident_priority/NewEditSheet.vue"
+
 export default {
   name: "IncidentPriorityTable",
 
   components: {
     NewEditSheet,
+    SettingsBreadcrumbs,
   },
   data() {
     return {
@@ -70,6 +85,8 @@ export default {
         { text: "Name", value: "name", sortable: true },
         { text: "Description", value: "description", sortable: false },
         { text: "Page Commander", value: "page_commander", sortable: true },
+        { text: "Default", value: "default", sortable: true },
+        { text: "Enabled", value: "enabled", sortable: true },
         { text: "Tactical Report Reminder", value: "tactical_report_reminder", sortable: true },
         { text: "Executive Report Reminder", value: "executive_report_reminder", sortable: true },
         { text: "View Order", value: "view_order", sortable: true },
@@ -90,7 +107,7 @@ export default {
       "table.rows.items",
       "table.rows.total",
     ]),
-    ...mapFields("route", ["query"]),
+    ...mapFields("route", ["query", "params"]),
   },
 
   created() {
@@ -99,9 +116,10 @@ export default {
     this.getAll()
 
     this.$watch(
-      (vm) => [vm.q, vm.itemsPerPage, vm.sortBy, vm.descending],
+      (vm) => [vm.q, vm.itemsPerPage, vm.sortBy, vm.descending, vm.project],
       () => {
         this.page = 1
+        this.$router.push({ query: { project: this.project[0].name } })
         this.getAll()
       }
     )

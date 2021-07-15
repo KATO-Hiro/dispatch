@@ -53,8 +53,15 @@ def get_email_username(email: str) -> str:
 def get_user_field(client: JIRA, user_email) -> dict:
     """Returns correct Jira user field based on Jira hosting type."""
     if JIRA_HOSTING_TYPE == "Server":
-        user = client.search_users(user_email, maxResults=1)[0]
-        return {"name": user.name}
+        username = get_email_username(user_email)
+        users = client.search_users(user=username)
+        for user in users:
+            if user.name == username:
+                return {"name": user.name}
+
+        # we default to the Jira user we use for managing issues
+        # if we can't find the user in Jira
+        return {"name": JIRA_USERNAME}
     if JIRA_HOSTING_TYPE == "Cloud":
         username = get_email_username(user_email)
         user = next(
@@ -168,6 +175,7 @@ class JiraTicketPlugin(TicketPlugin):
         commander_email: str,
         reporter_email: str,
         incident_type_plugin_metadata: dict = {},
+        db_session=None,
     ):
         """Creates a Jira issue."""
         client = JIRA(str(JIRA_API_URL), basic_auth=(JIRA_USERNAME, str(JIRA_PASSWORD)))

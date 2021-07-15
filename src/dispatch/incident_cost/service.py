@@ -8,7 +8,6 @@ from fastapi.encoders import jsonable_encoder
 
 from dispatch.config import ANNUAL_COST_EMPLOYEE, BUSINESS_HOURS_YEAR
 from dispatch.database.core import SessionLocal
-from dispatch.project import service as project_service
 from dispatch.incident import service as incident_service
 from dispatch.incident.enums import IncidentStatus
 from dispatch.incident_cost_type import service as incident_cost_type_service
@@ -81,19 +80,17 @@ def create(*, db_session, incident_cost_in: IncidentCostCreate) -> IncidentCost:
     """
     Creates a new incident cost.
     """
-    project = project_service.get_by_name(db_session=db_session, name=incident_cost_in.project.name)
-    incident_cost_type = incident_cost_type_service.get_by_name(
-        db_session=db_session,
-        project_id=project.id,
-        incident_cost_type_name=incident_cost_in.incident_cost_type.name,
+    incident_cost_type = incident_cost_type_service.get(
+        db_session=db_session, incident_cost_type_id=incident_cost_in.incident_cost_type.id
     )
     incident_cost = IncidentCost(
         **incident_cost_in.dict(exclude={"incident_cost_type", "project"}),
         incident_cost_type=incident_cost_type,
-        project=project,
+        project=incident_cost_type.project,
     )
     db_session.add(incident_cost)
     db_session.commit()
+
     return incident_cost
 
 
@@ -155,7 +152,7 @@ def calculate_incident_response_cost(
 
             participant_role_assumed_at = participant_role.assumed_at
 
-            if incident.status == IncidentStatus.active.value:
+            if incident.status == IncidentStatus.active:
                 # the incident is still active. we use the current time
                 participant_role_renounced_at = datetime.utcnow()
             else:
