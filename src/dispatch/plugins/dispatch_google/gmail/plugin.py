@@ -5,6 +5,8 @@
     :license: Apache, see LICENSE for more details.
 .. moduleauthor:: Kevin Glisson <kglisson@netflix.com>
 """
+
+import time
 from email.mime.text import MIMEText
 from typing import Dict, List, Optional
 import base64
@@ -19,10 +21,7 @@ from dispatch.messaging.strings import (
 from dispatch.plugins.bases import EmailPlugin
 from dispatch.plugins.dispatch_google import gmail as google_gmail_plugin
 from dispatch.plugins.dispatch_google.common import get_service
-from dispatch.plugins.dispatch_google.config import (
-    GOOGLE_USER_OVERRIDE,
-    GOOGLE_SERVICE_ACCOUNT_DELEGATED_ACCOUNT,
-)
+from dispatch.plugins.dispatch_google.config import GoogleConfiguration
 
 from dispatch.messaging.email.utils import create_message_body, create_multi_message_body
 
@@ -31,22 +30,35 @@ log = logging.getLogger(__name__)
 
 
 @retry(stop=stop_after_attempt(3))
-def send_message(service, message: dict):
+def send_message(service, message: dict) -> bool:
     """Sends an email message."""
-    return service.users().messages().send(userId="me", body=message).execute()
+    sent_message_thread_id = (
+        service.users().messages().send(userId="me", body=message).execute()["threadId"]
+    )
+
+    # wait for a bounce
+    time.sleep(1)
+
+    messages = (
+        service.users()
+        .messages()
+        .list(userId="me", q="from=mailer-daemon@googlemail.com", maxResults=10)
+        .execute()
+    ).get("messages", [])
+
+    for message in messages:
+        if message["threadId"] == sent_message_thread_id:
+            return False
+    return True
 
 
-def create_html_message(recipient: str, cc: str, subject: str, body: str) -> Dict:
+def create_html_message(sender: str, recipient: str, cc: str, subject: str, body: str) -> Dict:
     """Creates a message for an email."""
     message = MIMEText(body, "html")
 
-    if GOOGLE_USER_OVERRIDE:
-        recipient = cc = GOOGLE_USER_OVERRIDE
-        log.warning("GOOGLE_USER_OVERIDE set. Using override.")
-
     message["to"] = recipient
     message["cc"] = cc
-    message["from"] = GOOGLE_SERVICE_ACCOUNT_DELEGATED_ACCOUNT
+    message["from"] = sender
     message["subject"] = subject
     return {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
 
@@ -63,6 +75,7 @@ class GoogleGmailEmailPlugin(EmailPlugin):
     author_url = "https://github.com/netflix/dispatch.git"
 
     def __init__(self):
+        self.configuration_schema = GoogleConfiguration
         self.scopes = ["https://mail.google.com/"]
 
     def send(
@@ -76,7 +89,7 @@ class GoogleGmailEmailPlugin(EmailPlugin):
     ):
         """Sends an html email based on the type."""
         # TODO allow for bulk sending (kglisson)
-        client = get_service("gmail", "v1", self.scopes)
+        client = get_service(self.configuration, "gmail", "v1", self.scopes)
 
         subject = notification_text
 
@@ -91,11 +104,19 @@ class GoogleGmailEmailPlugin(EmailPlugin):
             cc = kwargs["cc"]
 
         if not items:
-            message_body = create_message_body(notification_template, notification_type, **kwargs)
+            message_body = create_message_body(
+                notification_template, notification_type, self.project_id, **kwargs
+            )
         else:
             message_body = create_multi_message_body(
-                notification_template, notification_type, items, **kwargs
+                notification_template, notification_type, items, self.project_id, **kwargs
             )
 
-        html_message = create_html_message(recipient, cc, subject, message_body)
+        html_message = create_html_message(
+            self.configuration.service_account_delegated_account,
+            recipient,
+            cc,
+            subject,
+            message_body,
+        )
         return send_message(client, html_message)

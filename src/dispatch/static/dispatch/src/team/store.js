@@ -14,6 +14,9 @@ const getDefaultSelectedState = () => {
     company: null,
     project: null,
     email: null,
+    evergreen: null,
+    evergreen_owner: null,
+    evergreen_reminder_interval: null,
     loading: false,
   }
 }
@@ -34,7 +37,7 @@ const state = {
     options: {
       q: "",
       page: 1,
-      itemsPerPage: 10,
+      itemsPerPage: 25,
       sortBy: ["name"],
       descending: [true],
       filters: {
@@ -52,7 +55,7 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options }, "Team")
     return TeamApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)

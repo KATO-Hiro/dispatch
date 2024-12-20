@@ -1,19 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic.error_wrappers import ErrorWrapper, ValidationError
-from sqlalchemy.orm import Session
 
-from dispatch.exceptions import ExistsError
 
 from dispatch.auth.permissions import (
-    ProjectCreatePermission,
     PermissionsDependency,
+    ProjectCreatePermission,
     ProjectUpdatePermission,
 )
 
-from dispatch.database.core import get_db
-from dispatch.database.service import common_parameters, search_filter_sort_paginate
-from dispatch.models import PrimaryKey
+from dispatch.database.core import DbSession
+from dispatch.database.service import CommonParameters, search_filter_sort_paginate
+from dispatch.exceptions import ExistsError
+from dispatch.models import OrganizationSlug, PrimaryKey
 
+from .flows import project_init_flow
 from .models import (
     ProjectCreate,
     ProjectRead,
@@ -22,11 +22,12 @@ from .models import (
 )
 from .service import create, delete, get, get_by_name, update
 
+
 router = APIRouter()
 
 
 @router.get("", response_model=ProjectPagination)
-def get_projects(common: dict = Depends(common_parameters)):
+def get_projects(common: CommonParameters):
     """Get all projects."""
     return search_filter_sort_paginate(model="Project", **common)
 
@@ -37,7 +38,12 @@ def get_projects(common: dict = Depends(common_parameters)):
     summary="Create a new project.",
     dependencies=[Depends(PermissionsDependency([ProjectCreatePermission]))],
 )
-def create_project(*, db_session: Session = Depends(get_db), project_in: ProjectCreate):
+def create_project(
+    db_session: DbSession,
+    organization: OrganizationSlug,
+    project_in: ProjectCreate,
+    background_tasks: BackgroundTasks,
+):
     """Create a new project."""
     project = get_by_name(db_session=db_session, name=project_in.name)
     if project:
@@ -47,6 +53,9 @@ def create_project(*, db_session: Session = Depends(get_db), project_in: Project
         )
 
     project = create(db_session=db_session, project_in=project_in)
+    background_tasks.add_task(
+        project_init_flow, project_id=project.id, organization_slug=organization
+    )
     return project
 
 
@@ -55,7 +64,7 @@ def create_project(*, db_session: Session = Depends(get_db), project_in: Project
     response_model=ProjectRead,
     summary="Get a project.",
 )
-def get_project(*, db_session: Session = Depends(get_db), project_id: PrimaryKey):
+def get_project(db_session: DbSession, project_id: PrimaryKey):
     """Get a project."""
     project = get(db_session=db_session, project_id=project_id)
     if not project:
@@ -72,8 +81,7 @@ def get_project(*, db_session: Session = Depends(get_db), project_id: PrimaryKey
     dependencies=[Depends(PermissionsDependency([ProjectUpdatePermission]))],
 )
 def update_project(
-    *,
-    db_session: Session = Depends(get_db),
+    db_session: DbSession,
     project_id: PrimaryKey,
     project_in: ProjectUpdate,
 ):
@@ -90,10 +98,10 @@ def update_project(
 
 @router.delete(
     "/{project_id}",
-    response_model=ProjectRead,
+    response_model=None,
     dependencies=[Depends(PermissionsDependency([ProjectUpdatePermission]))],
 )
-def delete_project(*, db_session: Session = Depends(get_db), project_id: PrimaryKey):
+def delete_project(db_session: DbSession, project_id: PrimaryKey):
     """Delete a project."""
     project = get(db_session=db_session, project_id=project_id)
     if not project:
@@ -101,6 +109,4 @@ def delete_project(*, db_session: Session = Depends(get_db), project_id: Primary
             status_code=status.HTTP_404_NOT_FOUND,
             detail=[{"msg": "A project with this id does not exist."}],
         )
-
     delete(db_session=db_session, project_id=project_id)
-    return project

@@ -30,8 +30,8 @@ const state = {
     options: {
       q: "",
       page: 1,
-      itemsPerPage: 10,
-      sortBy: "text",
+      itemsPerPage: 25,
+      sortBy: ["text"],
       descending: true,
       filters: {
         project: [],
@@ -48,7 +48,7 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions(state.table.options)
+    let params = SearchUtils.createParametersFromTableOptions(state.table.options, "Definition")
     return DefinitionApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)

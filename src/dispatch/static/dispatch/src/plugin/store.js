@@ -9,6 +9,9 @@ const getDefaultSelectedState = () => {
     id: null,
     enabled: null,
     configuration: [],
+    configuration_schema: {},
+    formkit_configuration_schema: [],
+    broken: false,
     project: null,
     plugin_instance: null,
     plugin: null,
@@ -22,6 +25,7 @@ const state = {
   },
   dialogs: {
     showCreateEdit: false,
+    showRemove: false,
   },
   table: {
     rows: {
@@ -31,7 +35,7 @@ const state = {
     options: {
       q: "",
       page: 1,
-      itemsPerPage: 10,
+      itemsPerPage: 25,
       sortBy: ["Plugin.slug"],
       descending: [true],
       filters: {
@@ -49,7 +53,7 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options }, "Plugin")
     return PluginApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)
@@ -61,7 +65,7 @@ const actions = {
   }, 500),
   getAllInstances: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options }, "Plugin")
     return PluginApi.getAllInstances(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)
@@ -72,13 +76,34 @@ const actions = {
       })
   }, 500),
   createEditShow({ commit }, plugin) {
+    if (plugin && plugin.broken) {
+      commit(
+        "notification_backend/addBeNotification",
+        {
+          text: "Plugin not installed correctly. Please review the Dispatch logs or contact your Dispatch Administrator",
+          type: "exception",
+        },
+        { root: true }
+      )
+      return
+    }
     commit("SET_DIALOG_EDIT", true)
     if (plugin) {
-      commit("SET_SELECTED", plugin)
+      PluginApi.getInstance(plugin.id).then((response) => {
+        commit("SET_SELECTED", response.data)
+      })
     }
   },
   closeCreateEdit({ commit }) {
     commit("SET_DIALOG_EDIT", false)
+    commit("RESET_SELECTED")
+  },
+  removeShow({ commit }, plugin) {
+    commit("SET_DIALOG_DELETE", true)
+    commit("SET_SELECTED", plugin)
+  },
+  closeRemove({ commit }) {
+    commit("SET_DIALOG_DELETE", false)
     commit("RESET_SELECTED")
   },
   save({ commit, dispatch }) {
@@ -116,7 +141,7 @@ const actions = {
     }
   },
   remove({ commit, dispatch }) {
-    return PluginApi.delete(state.selected.id).then(function () {
+    return PluginApi.deleteInstance(state.selected.id).then(function () {
       dispatch("closeRemove")
       dispatch("getAllInstances")
       commit(
@@ -128,16 +153,67 @@ const actions = {
   },
 }
 
+function convertToFormkit(json_schema) {
+  if (!json_schema.properties) {
+    return []
+  }
+  var formkit_schema = []
+  var title = {
+    $el: "h1",
+    children: json_schema.description,
+  }
+  formkit_schema.push(title)
+  for (const [key, value] of Object.entries(json_schema.properties)) {
+    var obj = {}
+    if (value.type == "string" || value.type == "password") {
+      obj = {
+        $formkit: "text",
+        name: key,
+        label: value.title,
+        help: value.description,
+        validation: "required",
+      }
+    } else if (value.type == "boolean") {
+      obj = {
+        $cmp: "FormKit",
+        props: {
+          name: key,
+          type: "checkbox",
+          label: value.title,
+          help: value.description,
+        },
+      }
+    } else if (value.allOf) {
+      const ref = value.allOf[0].$ref
+      // will be something like "#/definitions/HostingType"
+      const ref_name = ref.split("/").pop()
+      const ref_obj = json_schema.definitions[ref_name]["enum"]
+      obj = {
+        $formkit: "select",
+        name: key,
+        label: value.title,
+        help: value.description,
+        options: ref_obj.map((item) => {
+          return { label: item, value: item }
+        }),
+        default: value.default,
+        validation: "required",
+      }
+    }
+    formkit_schema.push(obj)
+  }
+  return formkit_schema
+}
+
 const mutations = {
   updateField,
-  addConfigurationItem(state) {
-    state.selected.configuration.push({ key: null, value: null })
-  },
-  removeConfigurationItem(state, idx) {
-    state.selected.configuration.splice(idx)
-  },
   SET_SELECTED(state, value) {
-    state.selected = Object.assign(state.selected, value)
+    Object.keys(value).forEach(function (key) {
+      if (value[key]) {
+        state.selected[key] = value[key]
+      }
+    })
+    state.selected.formkit_configuration_schema = convertToFormkit(value.configuration_schema)
   },
   SET_SELECTED_LOADING(state, value) {
     state.selected.loading = value
@@ -150,6 +226,9 @@ const mutations = {
   },
   SET_DIALOG_EDIT(state, value) {
     state.dialogs.showCreateEdit = value
+  },
+  SET_DIALOG_DELETE(state, value) {
+    state.dialogs.showRemove = value
   },
   RESET_SELECTED(state) {
     // do not reset project

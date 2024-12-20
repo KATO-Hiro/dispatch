@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional, Type
 
 from dispatch.database.core import Base
-from dispatch.incident.models import Incident
+from dispatch.models import PrimaryKey
 from dispatch.plugin import service as plugin_service
 from dispatch.project import service as project_service
 from dispatch.search_filter import service as search_filter_service
@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 
 def get(*, db_session, notification_id: int) -> Optional[Notification]:
-    """Gets a notifcation by id."""
+    """Gets a notification by id."""
     return db_session.query(Notification).filter(Notification.id == notification_id).one_or_none()
 
 
@@ -31,6 +31,19 @@ def get_all_enabled(*, db_session, project_id: int) -> Optional[List[Notificatio
         .filter(Notification.enabled == True)  # noqa Flake8 E712
         .filter(Notification.project_id == project_id)
     ).all()
+
+
+def get_overdue_evergreen_notifications(
+    *, db_session, project_id: int
+) -> List[Optional[Notification]]:
+    """Returns all notifications that have not had a recent evergreen notification."""
+    query = (
+        db_session.query(Notification)
+        .filter(Notification.project_id == project_id)
+        .filter(Notification.evergreen == True)  # noqa
+        .filter(Notification.overdue == True)  # noqa
+    )
+    return query.all()
 
 
 def create(*, db_session, notification_in: NotificationCreate) -> Notification:
@@ -89,19 +102,28 @@ def delete(*, db_session, notification_id: int):
     db_session.commit()
 
 
-def send(*, db_session, project_id: int, notification: Notification, notification_params: dict):
+def send(
+    *, db_session, project_id: int, notification: Notification, notification_params: dict = None
+):
     """Send a notification via plugin."""
     plugin = plugin_service.get_active_instance(
         db_session=db_session, project_id=project_id, plugin_type=notification.type
     )
+
     if plugin:
-        plugin.instance.send(
-            notification.target,
-            notification_params["text"],
-            notification_params["template"],
-            notification_params["type"],
-            **notification_params["kwargs"],
-        )
+        # Can raise exception "tenacity.RetryError: RetryError". (Email may still go through).
+        try:
+            plugin.instance.send(
+                notification.target,
+                notification_params["text"],
+                notification_params["template"],
+                notification_params["type"],
+                **notification_params["kwargs"],
+            )
+        except Exception as e:
+            log.exception(e)
+            log.error(f"Error in sending {notification_params['type']}: {e}")
+            log.exception(e)
     else:
         log.warning(
             f"Notification {notification.name} not sent. No {notification.type} plugin is active."
@@ -109,21 +131,26 @@ def send(*, db_session, project_id: int, notification: Notification, notificatio
 
 
 def filter_and_send(
-    *, db_session, incident: Incident, class_instance: Type[Base], notification_params: dict
+    *,
+    db_session,
+    project_id: PrimaryKey,
+    class_instance: Type[Base],
+    notification_params: dict = None,
 ):
     """Sends notifications."""
-    notifications = get_all_enabled(db_session=db_session, project_id=incident.project.id)
+    notifications = get_all_enabled(db_session=db_session, project_id=project_id)
     for notification in notifications:
         for search_filter in notification.filters:
             match = search_filter_service.match(
                 db_session=db_session,
+                subject=search_filter.subject,
                 filter_spec=search_filter.expression,
                 class_instance=class_instance,
             )
             if match:
                 send(
                     db_session=db_session,
-                    project_id=incident.project.id,
+                    project_id=project_id,
                     notification=notification,
                     notification_params=notification_params,
                 )
@@ -131,7 +158,7 @@ def filter_and_send(
         if not notification.filters:
             send(
                 db_session=db_session,
-                project_id=incident.project.id,
+                project_id=project_id,
                 notification=notification,
                 notification_params=notification_params,
             )

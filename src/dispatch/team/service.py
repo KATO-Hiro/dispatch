@@ -1,8 +1,7 @@
 from typing import List, Optional
 
-from dispatch.incident.models import Incident
-
 from dispatch.project import service as project_service
+from dispatch.project.models import Project
 from dispatch.search_filter import service as search_filter_service
 
 from .models import TeamContact, TeamContactCreate, TeamContactUpdate
@@ -25,14 +24,25 @@ def get_all(*, db_session) -> List[Optional[TeamContact]]:
     return db_session.query(TeamContact)
 
 
-def get_or_create(*, db_session, email: str, incident: Incident = None, **kwargs) -> TeamContact:
-    contact = get_by_email(db_session=db_session, email=email, project_id=incident.project.id)
+def get_or_create(*, db_session, email: str, project: Project, **kwargs) -> TeamContact:
+    contact = get_by_email(db_session=db_session, email=email, project_id=project.id)
 
     if not contact:
-        team_contact = TeamContactCreate(email=email, project=incident.project, **kwargs)
+        team_contact = TeamContactCreate(email=email, project=project, **kwargs)
         contact = create(db_session=db_session, team_contact_in=team_contact)
 
     return contact
+
+
+def get_overdue_evergreen_teams(*, db_session, project_id: int) -> List[Optional[TeamContact]]:
+    """Returns all teams that have not had a recent evergreen notification."""
+    query = (
+        db_session.query(TeamContact)
+        .filter(TeamContact.project_id == project_id)
+        .filter(TeamContact.evergreen == True)  # noqa
+        .filter(TeamContact.overdue == True)  # noqa
+    )
+    return query.all()
 
 
 def create(*, db_session, team_contact_in: TeamContactCreate) -> TeamContact:

@@ -2,24 +2,25 @@ from typing import List, Optional
 
 from pydantic import ValidationError
 from pydantic.error_wrappers import ErrorWrapper
-from dispatch.exceptions import NotFoundError
-
+from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
-from .models import Project, ProjectCreate, ProjectUpdate, ProjectRead
+from dispatch.exceptions import NotFoundError
+
+from .models import Project, ProjectCreate, ProjectRead, ProjectUpdate
 
 
-def get(*, db_session, project_id: int) -> Optional[Project]:
+def get(*, db_session: Session, project_id: int) -> Project | None:
     """Returns a project based on the given project id."""
     return db_session.query(Project).filter(Project.id == project_id).first()
 
 
-def get_default(*, db_session) -> Optional[Project]:
+def get_default(*, db_session: Session) -> Optional[Project]:
     """Returns the default project."""
     return db_session.query(Project).filter(Project.default == true()).one_or_none()
 
 
-def get_default_or_raise(*, db_session) -> Project:
+def get_default_or_raise(*, db_session: Session) -> Project:
     """Returns the default project or raise a ValidationError if one doesn't exist."""
     project = get_default(db_session=db_session)
 
@@ -36,12 +37,12 @@ def get_default_or_raise(*, db_session) -> Project:
     return project
 
 
-def get_by_name(*, db_session, name: str) -> Optional[Project]:
+def get_by_name(*, db_session: Session, name: str) -> Optional[Project]:
     """Returns a project based on the given project name."""
     return db_session.query(Project).filter(Project.name == name).one_or_none()
 
 
-def get_by_name_or_raise(*, db_session, project_in=ProjectRead) -> Project:
+def get_by_name_or_raise(*, db_session: Session, project_in: ProjectRead) -> Project:
     """Returns the project specified or raises ValidationError."""
     project = get_by_name(db_session=db_session, name=project_in.name)
 
@@ -59,12 +60,12 @@ def get_by_name_or_raise(*, db_session, project_in=ProjectRead) -> Project:
     return project
 
 
-def get_by_name_or_default(*, db_session, project_in=ProjectRead) -> Project:
+def get_by_name_or_default(*, db_session, project_in: ProjectRead) -> Project:
     """Returns a project based on a name or the default if not specified."""
-    if project_in.name:
-        return get_by_name_or_raise(db_session=db_session, project_in=project_in)
-    else:
-        return get_default_or_raise(db_session=db_session)
+    if project_in:
+        if project_in.name:
+            return get_by_name_or_raise(db_session=db_session, project_in=project_in)
+    return get_default_or_raise(db_session=db_session)
 
 
 def get_all(*, db_session) -> List[Optional[Project]]:
@@ -76,8 +77,8 @@ def create(*, db_session, project_in: ProjectCreate) -> Project:
     """Creates a project."""
     from dispatch.organization import service as organization_service
 
-    organization = organization_service.get_by_name(
-        db_session=db_session, name=project_in.organization.name
+    organization = organization_service.get_by_slug(
+        db_session=db_session, slug=project_in.organization.slug
     )
     project = Project(
         **project_in.dict(exclude={"organization"}),

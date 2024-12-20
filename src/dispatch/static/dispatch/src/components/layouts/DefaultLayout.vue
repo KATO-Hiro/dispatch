@@ -8,8 +8,8 @@
 
     <refresh />
     <v-main>
-      <div class="page-wrapper">
-        <v-container pa-4 grid-list-lg>
+      <div>
+        <v-container fluid class="ma-0 pa-0">
           <router-view />
         </v-container>
       </div>
@@ -19,8 +19,8 @@
 </template>
 
 <script>
-import AppDrawer from "@/components/AppDrawer"
-import AppToolbar from "@/components/AppToolbar"
+import AppDrawer from "@/components/AppDrawer.vue"
+import AppToolbar from "@/components/AppToolbar.vue"
 import Refresh from "@/components/Refresh.vue"
 import NotificationSnackbarsWrapper from "@/components/NotificationSnackbarsWrapper.vue"
 import OrganizationBanner from "@/organization/OrganizationBanner.vue"

@@ -4,6 +4,7 @@
     :copyright: (c) 2019 by Netflix Inc., see AUTHORS for more
     :license: Apache, see LICENSE for more details.
 """
+
 import logging
 import time
 from typing import Any, List
@@ -15,7 +16,7 @@ from dispatch.decorators import apply, counter, timer
 from dispatch.plugins.bases import ParticipantGroupPlugin
 from dispatch.plugins.dispatch_google import groups as google_group_plugin
 from dispatch.plugins.dispatch_google.common import get_service
-from dispatch.plugins.dispatch_google.config import GOOGLE_USER_OVERRIDE, GOOGLE_DOMAIN
+from dispatch.plugins.dispatch_google.config import GoogleConfiguration
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ def make_call(client: Any, func: Any, delay: int = None, propagate_errors: bool 
         else:
             log.error(e.content.decode())
 
-        raise TryAgain
+        raise TryAgain from None
 
 
 def expand_group(client: Any, group_key: str):
@@ -67,10 +68,6 @@ def add_member(client: Any, group_key: str, email: str, role: str):
 
     for m in members:
         body = {"email": m, "role": role}
-        if GOOGLE_USER_OVERRIDE:
-            log.warning("GOOGLE_USER_OVERIDE set. Using override.")
-            body["email"] = GOOGLE_USER_OVERRIDE
-
         try:
             make_call(
                 client.members(), "insert", groupKey=group_key, body=body, propagate_errors=True
@@ -88,7 +85,21 @@ def add_member(client: Any, group_key: str, email: str, role: str):
 
 def remove_member(client: Any, group_key: str, email: str):
     """Removes member from google group."""
-    return make_call(client.members(), "delete", groupKey=group_key, memberKey=email)
+    try:
+        return make_call(
+            client.members(), "delete", groupKey=group_key, memberKey=email, propagate_errors=True
+        )
+    except HttpError as e:
+        if e.resp.status in [409]:
+            log.debug(
+                f"Member does not exist in google group. GroupKey={group_key} MemberKey={email}"
+            )
+            return
+        elif e.resp.status in [404]:
+            log.debug(
+                f"Group does not exist. GroupKey={group_key} Trying to remove MemberKey={email}"
+            )
+            return
 
 
 def list_members(client: Any, group_key: str, **kwargs):
@@ -118,9 +129,8 @@ class GoogleGroupParticipantGroupPlugin(ParticipantGroupPlugin):
     author = "Netflix"
     author_url = "https://github.com/netflix/dispatch.git"
 
-    _schema = None
-
     def __init__(self):
+        self.configuration_schema = GoogleConfiguration
         self.scopes = [
             "https://www.googleapis.com/auth/admin.directory.group",
             "https://www.googleapis.com/auth/apps.groups.settings",
@@ -130,8 +140,9 @@ class GoogleGroupParticipantGroupPlugin(ParticipantGroupPlugin):
         self, name: str, participants: List[str], description: str = None, role: str = "MEMBER"
     ):
         """Creates a new Google Group."""
-        client = get_service("admin", "directory_v1", self.scopes)
-        group_key = f"{name.lower()}@{GOOGLE_DOMAIN}"
+        client = get_service(self.configuration, "admin", "directory_v1", self.scopes)
+        # note: group username is limited to 60 characters
+        group_key = f"{name.lower()[:60]}@{self.configuration.google_domain}"
 
         if not description:
             description = "Group automatically created by Dispatch."
@@ -143,30 +154,35 @@ class GoogleGroupParticipantGroupPlugin(ParticipantGroupPlugin):
 
         group.update(
             {
-                "weblink": f"https://groups.google.com/a/{GOOGLE_DOMAIN}/forum/#!forum/{group['name']}"
+                "weblink": f"https://groups.google.com/a/{self.configuration.google_domain}/forum/#!forum/{group['name']}"
             }
         )
         return group
 
     def add(self, email: str, participants: List[str], role: str = "MEMBER"):
         """Adds participants to an existing Google Group."""
-        client = get_service("admin", "directory_v1", self.scopes)
+        client = get_service(self.configuration, "admin", "directory_v1", self.scopes)
         for p in participants:
             add_member(client, email, p, role)
 
     def remove(self, email: str, participants: List[str]):
         """Removes participants from an existing Google Group."""
-        client = get_service("admin", "directory_v1", self.scopes)
+        client = get_service(self.configuration, "admin", "directory_v1", self.scopes)
         for p in participants:
             remove_member(client, email, p)
 
-    def list(self, email: str):
+    def list(self, email: str) -> list[str]:
         """Lists members from an existing Google Group."""
-        client = get_service("admin", "directory_v1", self.scopes)
-        members = list_members(client, email)
-        return [m["email"] for m in members["members"]]
+        client = get_service(self.configuration, "admin", "directory_v1", self.scopes)
+        try:
+            members = list_members(client, email)
+            return [m["email"] for m in members.get("members", [])]
+        except HttpError as e:
+            if e.resp.status == 404:
+                log.warning(f"Group does not exist. GroupKey={email} Trying to list members.")
+        return []
 
     def delete(self, email: str):
         """Deletes an existing Google group."""
-        client = get_service("admin", "directory_v1", self.scopes)
+        client = get_service(self.configuration, "admin", "directory_v1", self.scopes)
         delete_group(client, email)

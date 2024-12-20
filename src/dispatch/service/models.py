@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 from pydantic import Field
-from dispatch.models import PrimaryKey
+from dispatch.models import EvergreenBase, EvergreenMixin, PrimaryKey
 
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, PrimaryKeyConstraint, String, Table
 from sqlalchemy.orm import relationship
@@ -9,19 +9,9 @@ from sqlalchemy.sql.schema import UniqueConstraint
 from sqlalchemy_utils import TSVectorType
 
 from dispatch.database.core import Base
-from dispatch.models import DispatchBase, TimeStampMixin, ProjectMixin
+from dispatch.models import TimeStampMixin, ProjectMixin, Pagination
 from dispatch.project.models import ProjectRead
 from dispatch.search_filter.models import SearchFilterRead
-
-
-# Association tables for many to many relationships
-assoc_service_incidents = Table(
-    "service_incident",
-    Base.metadata,
-    Column("incident_id", Integer, ForeignKey("incident.id")),
-    Column("service_id", Integer, ForeignKey("service.id")),
-    PrimaryKeyConstraint("incident_id", "service_id"),
-)
 
 
 assoc_service_filters = Table(
@@ -34,7 +24,7 @@ assoc_service_filters = Table(
 
 
 # SQLAlchemy models...
-class Service(Base, TimeStampMixin, ProjectMixin):
+class Service(Base, TimeStampMixin, ProjectMixin, EvergreenMixin):
     __table_args__ = (UniqueConstraint("external_id", "project_id"),)
     id = Column(Integer, primary_key=True)
     is_active = Column(Boolean, default=True)
@@ -42,20 +32,21 @@ class Service(Base, TimeStampMixin, ProjectMixin):
     type = Column(String, default="pagerduty-oncall")
     description = Column(String)
     external_id = Column(String)
-    incidents = relationship("Incident", secondary=assoc_service_incidents, backref="services")
+    health_metrics = Column(Boolean, default=False)
 
     # Relationships
     filters = relationship("SearchFilter", secondary=assoc_service_filters, backref="services")
 
-    search_vector = Column(TSVectorType("name"))
+    search_vector = Column(TSVectorType("name", regconfig="pg_catalog.simple"))
 
 
 # Pydantic models...
-class ServiceBase(DispatchBase):
-    name: Optional[str] = Field(None, nullable=True)
-    external_id: Optional[str] = Field(None, nullable=True)
+class ServiceBase(EvergreenBase):
     description: Optional[str] = Field(None, nullable=True)
+    external_id: Optional[str] = Field(None, nullable=True)
+    health_metrics: Optional[bool] = None
     is_active: Optional[bool] = None
+    name: Optional[str] = Field(None, nullable=True)
     type: Optional[str] = Field(None, nullable=True)
 
 
@@ -75,10 +66,5 @@ class ServiceRead(ServiceBase):
     updated_at: Optional[datetime] = None
 
 
-class ServiceNested(ServiceBase):
-    id: PrimaryKey
-
-
-class ServicePagination(DispatchBase):
-    total: int
+class ServicePagination(Pagination):
     items: List[ServiceRead] = []

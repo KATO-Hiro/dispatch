@@ -6,13 +6,15 @@ from sqlalchemy import Column, Boolean, String, Integer, ForeignKey, select
 from sqlalchemy.ext.hybrid import hybrid_property
 
 from dispatch.database.core import Base
-from dispatch.models import DispatchBase, IndividualReadNested, PrimaryKey
+from dispatch.models import DispatchBase, PrimaryKey, Pagination
 from dispatch.participant_role.models import (
     ParticipantRoleCreate,
     ParticipantRoleRead,
+    ParticipantRoleReadMinimal,
     ParticipantRole,
 )
 from dispatch.service.models import ServiceRead
+from dispatch.individual.models import IndividualContactRead, IndividualContactReadMinimal
 
 
 class Participant(Base):
@@ -27,18 +29,20 @@ class Participant(Base):
     )
     added_reason = Column(String)
     after_hours_notification = Column(Boolean, default=False)
+    user_conversation_id = Column(String)
 
     # relationships
     feedback = relationship("Feedback", backref="participant")
-    service_id = Column(Integer, ForeignKey("service.id", ondelete="CASCADE"))
-    service = relationship("Service", backref="participant")
     incident_id = Column(Integer, ForeignKey("incident.id", ondelete="CASCADE", use_alter=True))
+    case_id = Column(Integer, ForeignKey("case.id", ondelete="CASCADE", use_alter=True))
     individual = relationship("IndividualContact", lazy="subquery", backref="participant")
-    individual_contact_id = Column(Integer, ForeignKey("individual_contact.id"))
+    individual_contact_id = Column(Integer, ForeignKey("individual_contact.id", ondelete="CASCADE"))
     participant_roles = relationship(
         "ParticipantRole", backref="participant", lazy="subquery", cascade="all, delete-orphan"
     )
     reports = relationship("Report", backref="participant")
+    service = relationship("Service", backref="participant")
+    service_id = Column(Integer, ForeignKey("service.id", ondelete="CASCADE"))
     created_tasks = relationship(
         "Task", backref="creator", primaryjoin="Participant.id==Task.creator_id"
     )
@@ -78,15 +82,20 @@ class ParticipantCreate(ParticipantBase):
 
 
 class ParticipantUpdate(ParticipantBase):
-    individual: Optional[IndividualReadNested]
+    individual: Optional[IndividualContactRead]
 
 
 class ParticipantRead(ParticipantBase):
     id: PrimaryKey
     participant_roles: Optional[List[ParticipantRoleRead]] = []
-    individual: Optional[IndividualReadNested]
+    individual: Optional[IndividualContactRead]
 
 
-class ParticipantPagination(DispatchBase):
-    total: int
+class ParticipantReadMinimal(ParticipantBase):
+    id: PrimaryKey
+    participant_roles: Optional[List[ParticipantRoleReadMinimal]] = []
+    individual: Optional[IndividualContactReadMinimal]
+
+
+class ParticipantPagination(Pagination):
     items: List[ParticipantRead] = []

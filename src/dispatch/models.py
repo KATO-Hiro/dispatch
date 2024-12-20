@@ -1,19 +1,21 @@
-from datetime import datetime
-from typing import List, Optional
-from pydantic.fields import Field
-from pydantic.networks import EmailStr
-from pydantic.types import conint, constr
+from typing import Optional
+from datetime import datetime, timedelta
 
-import validators
-from pydantic import BaseModel, validator
+from pydantic.fields import Field
+from pydantic.networks import EmailStr, AnyHttpUrl
+from pydantic import BaseModel
+from pydantic.types import conint, constr, SecretStr
+
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, event, ForeignKey
+from sqlalchemy import func
 from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 
 # pydantic type that limits the range of primary keys
 PrimaryKey = conint(gt=0, lt=2147483647)
 NameStr = constr(regex=r"^(?!\s*$).+", strip_whitespace=True, min_length=3)
-OrganizationSlug = constr(regex=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", min_length=3)
+OrganizationSlug = constr(regex=r"^[\w]+(?:_[\w]+)*$", min_length=3)
 
 
 # SQLAlchemy models...
@@ -66,6 +68,39 @@ class ResourceMixin(TimeStampMixin):
     weblink = Column(String)
 
 
+class EvergreenMixin(object):
+    """Evergreen mixin."""
+
+    evergreen = Column(Boolean)
+    evergreen_owner = Column(String)
+    evergreen_reminder_interval = Column(Integer, default=90)  # number of days
+    evergreen_last_reminder_at = Column(DateTime, default=datetime.utcnow())
+
+    @hybrid_property
+    def overdue(self):
+        now = datetime.utcnow()
+        next_reminder = self.evergreen_last_reminder_at + timedelta(
+            days=self.evergreen_reminder_interval
+        )
+
+        if now >= next_reminder:
+            return True
+
+    @overdue.expression
+    def overdue(cls):
+        return (
+            func.date_part("day", func.now() - cls.evergreen_last_reminder_at)
+            >= cls.evergreen_reminder_interval  # noqa
+        )
+
+
+class FeedbackMixin(object):
+    """Feedback mixin."""
+
+    rating = Column(String)
+    feedback = Column(String)
+
+
 # Pydantic models...
 class DispatchBase(BaseModel):
     class Config:
@@ -74,18 +109,34 @@ class DispatchBase(BaseModel):
         arbitrary_types_allowed = True
         anystr_strip_whitespace = True
 
+        json_encoders = {
+            # custom output conversion for datetime
+            datetime: lambda v: v.strftime("%Y-%m-%dT%H:%M:%S.%fZ") if v else None,
+            SecretStr: lambda v: v.get_secret_value() if v else None,
+        }
+
+
+class Pagination(DispatchBase):
+    itemsPerPage: int
+    page: int
+    total: int
+
+
+class PrimaryKeyModel(BaseModel):
+    id: PrimaryKey
+
+
+class EvergreenBase(DispatchBase):
+    evergreen: Optional[bool] = False
+    evergreen_owner: Optional[EmailStr]
+    evergreen_reminder_interval: Optional[int] = 90
+    evergreen_last_reminder_at: Optional[datetime] = Field(None, nullable=True)
+
 
 class ResourceBase(DispatchBase):
     resource_type: Optional[str] = Field(None, nullable=True)
     resource_id: Optional[str] = Field(None, nullable=True)
-    weblink: Optional[str] = Field(None, nullable=True)
-
-    @validator("weblink")
-    def sanitize_weblink(cls, v):
-        if v:
-            if not validators.url(v):
-                raise ValueError("Weblink must be a valid url.")
-        return v
+    weblink: Optional[AnyHttpUrl] = Field(None, nullable=True)
 
 
 class ContactBase(DispatchBase):
@@ -97,67 +148,3 @@ class ContactBase(DispatchBase):
     contact_type: Optional[str] = Field(None, nullable=True)
     notes: Optional[str] = Field(None, nullable=True)
     owner: Optional[str] = Field(None, nullable=True)
-
-
-class PluginOptionModel(DispatchBase):
-    pass
-
-
-# self referential models
-class TermNested(DispatchBase):
-    id: Optional[PrimaryKey]
-    text: str
-    # disabling this for now as recursive models break swagger api gen
-    # definitions: Optional[List["DefinitionNested"]] = []
-
-
-class ProjectReadNested(DispatchBase):
-    name: str
-
-
-class DefinitionNested(DispatchBase):
-    id: Optional[PrimaryKey]
-    text: str
-    project: ProjectReadNested
-    terms: Optional[List["TermNested"]] = []
-
-
-class ServiceNested(DispatchBase):
-    pass
-
-
-class IndividualNested(DispatchBase):
-    pass
-
-
-class TeamNested(DispatchBase):
-    pass
-
-
-class TermReadNested(DispatchBase):
-    id: PrimaryKey
-    text: str
-
-
-class DefinitionReadNested(DispatchBase):
-    id: PrimaryKey
-    text: str
-
-
-class ServiceReadNested(DispatchBase):
-    name: Optional[str] = Field(None, nullable=True)
-    external_id: Optional[str] = Field(None, nullable=True)
-    is_active: Optional[bool] = False
-    type: Optional[str] = Field(None, nullable=True)
-
-
-class IndividualReadNested(ContactBase):
-    id: Optional[PrimaryKey]
-    title: Optional[str] = Field(None, nullable=True)
-    external_id: Optional[str]
-    weblink: Optional[str]
-    title: Optional[str]
-
-
-class TeamReadNested(ContactBase):
-    pass

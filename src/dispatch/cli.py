@@ -3,9 +3,13 @@ import os
 
 import click
 import uvicorn
-from dispatch import __version__, config
-from dispatch.enums import UserRoles
 
+from dispatch import __version__, config
+from dispatch.config import DISPATCH_UI_URL
+from dispatch.enums import UserRoles
+from dispatch.plugin.models import PluginInstance
+
+from .extensions import configure_extensions
 from .scheduler import scheduler
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -20,6 +24,8 @@ def dispatch_cli():
     from .logging import configure_logging
 
     configure_logging()
+
+    configure_extensions()
 
 
 @dispatch_cli.group("plugins")
@@ -75,10 +81,10 @@ def list_plugins():
 )
 def install_plugins(force):
     """Installs all plugins, or only one."""
+    from dispatch.common.utils.cli import install_plugins
     from dispatch.database.core import SessionLocal
     from dispatch.plugin import service as plugin_service
-    from dispatch.plugin.models import Plugin
-    from dispatch.common.utils.cli import install_plugins
+    from dispatch.plugin.models import Plugin, PluginEvent
     from dispatch.plugins.base import plugins
 
     install_plugins()
@@ -88,7 +94,7 @@ def install_plugins(force):
         record = plugin_service.get_by_slug(db_session=db_session, slug=p.slug)
         if not record:
             click.secho(f"Installing plugin... Slug: {p.slug} Version: {p.version}", fg="blue")
-            record = Plugin(
+            plugin = Plugin(
                 title=p.title,
                 slug=p.slug,
                 type=p.type,
@@ -98,19 +104,36 @@ def install_plugins(force):
                 multiple=p.multiple,
                 description=p.description,
             )
-            db_session.add(record)
+            db_session.add(plugin)
+            record = plugin
+        else:
+            if force:
+                click.secho(f"Updating plugin... Slug: {p.slug} Version: {p.version}", fg="blue")
+                # we only update values that should change
+                record.title = p.title
+                record.version = p.version
+                record.author = p.author
+                record.author_url = p.author_url
+                record.description = p.description
+                record.type = p.type
 
-        if force:
-            click.secho(f"Updating plugin... Slug: {p.slug} Version: {p.version}", fg="blue")
-            # we only update values that should change
-            record.title = p.title
-            record.version = p.version
-            record.author = p.author
-            record.author_url = p.author_url
-            record.description = p.description
-            record.type = p.type
-            db_session.add(record)
-
+        # Registers the plugin events with the plugin or updates the plugin events
+        for plugin_event_in in p.plugin_events:
+            click.secho(f"  Registering plugin event... Slug: {plugin_event_in.slug}", fg="blue")
+            if plugin_event := plugin_service.get_plugin_event_by_slug(
+                db_session=db_session, slug=plugin_event_in.slug
+            ):
+                plugin_event.name = plugin_event_in.name
+                plugin_event.description = plugin_event_in.description
+                plugin_event.plugin = record
+            else:
+                plugin_event = PluginEvent(
+                    name=plugin_event_in.name,
+                    slug=plugin_event_in.slug,
+                    description=plugin_event_in.description,
+                    plugin=record,
+                )
+                db_session.add(plugin_event)
         db_session.commit()
 
 
@@ -140,6 +163,43 @@ def dispatch_user():
     pass
 
 
+@dispatch_user.command("register")
+@click.argument("email")
+@click.option(
+    "--organization",
+    "-o",
+    required=True,
+    help="Organization to set role for.",
+)
+@click.password_option()
+@click.option(
+    "--role",
+    "-r",
+    required=True,
+    type=click.Choice(UserRoles),
+    help="Role to be assigned to the user.",
+)
+def register_user(email: str, role: str, password: str, organization: str):
+    """Registers a new user."""
+    from dispatch.auth import service as user_service
+    from dispatch.auth.models import UserOrganization, UserRegister
+    from dispatch.database.core import refetch_db_session
+
+    db_session = refetch_db_session(organization_slug=organization)
+    user = user_service.get_by_email(email=email, db_session=db_session)
+    if user:
+        click.secho(f"User already exists. Email: {email}", fg="red")
+        return
+
+    user_organization = UserOrganization(role=role, organization={"name": organization})
+    user_service.create(
+        user_in=UserRegister(email=email, password=password, organizations=[user_organization]),
+        db_session=db_session,
+        organization=organization,
+    )
+    click.secho("User registered successfully.", fg="green")
+
+
 @dispatch_user.command("update")
 @click.argument("email")
 @click.option(
@@ -157,9 +217,9 @@ def dispatch_user():
 )
 def update_user(email: str, role: str, organization: str):
     """Updates a user's roles."""
-    from dispatch.database.core import SessionLocal
     from dispatch.auth import service as user_service
-    from dispatch.auth.models import UserUpdate, UserOrganization
+    from dispatch.auth.models import UserOrganization, UserUpdate
+    from dispatch.database.core import SessionLocal
 
     db_session = SessionLocal()
     user = user_service.get_by_email(email=email, db_session=db_session)
@@ -181,9 +241,9 @@ def update_user(email: str, role: str, organization: str):
 @click.password_option()
 def reset_user_password(email: str, password: str):
     """Resets a user's password."""
-    from dispatch.database.core import SessionLocal
     from dispatch.auth import service as user_service
     from dispatch.auth.models import UserUpdate
+    from dispatch.database.core import SessionLocal
 
     db_session = SessionLocal()
     user = user_service.get_by_email(email=email, db_session=db_session)
@@ -208,9 +268,7 @@ def database_init():
     """Initializes a new database."""
     click.echo("Initializing new database...")
     from .database.core import engine
-    from .database.manage import (
-        init_database,
-    )
+    from .database.manage import init_database
 
     init_database(engine)
     click.secho("Success.", fg="green")
@@ -224,12 +282,13 @@ def database_init():
 )
 def restore_database(dump_file):
     """Restores the database via psql."""
-    from sh import psql, createdb, ErrorReturnCode_1
+    from sh import ErrorReturnCode_1, createdb, psql
+
     from dispatch.config import (
+        DATABASE_CREDENTIALS,
         DATABASE_HOSTNAME,
         DATABASE_NAME,
         DATABASE_PORT,
-        DATABASE_CREDENTIALS,
     )
 
     username, password = str(DATABASE_CREDENTIALS).split(":")
@@ -277,11 +336,12 @@ def restore_database(dump_file):
 def dump_database(dump_file):
     """Dumps the database via pg_dump."""
     from sh import pg_dump
+
     from dispatch.config import (
+        DATABASE_CREDENTIALS,
         DATABASE_HOSTNAME,
         DATABASE_NAME,
         DATABASE_PORT,
-        DATABASE_CREDENTIALS,
     )
 
     username, password = str(DATABASE_CREDENTIALS).split(":")
@@ -301,20 +361,24 @@ def dump_database(dump_file):
 
 
 @dispatch_database.command("drop")
-@click.option("--yes", is_flag=True, help="Silences all confirmation prompts.")
-def drop_database(yes):
+def drop_database():
     """Drops all data in database."""
-    from sqlalchemy_utils import drop_database
+    from sqlalchemy_utils import database_exists, drop_database
 
-    if yes:
-        drop_database(str(config.SQLALCHEMY_DATABASE_URI))
-        click.secho("Success.", fg="green")
+    database_hostname = click.prompt(
+        f"Please enter the database hostname (env = {config.DATABASE_HOSTNAME})"
+    )
+    database_name = click.prompt(f"Please enter the database name (env = {config.DATABASE_NAME})")
+    sqlalchemy_database_uri = f"postgresql+psycopg2://{config._DATABASE_CREDENTIAL_USER}:{config._QUOTED_DATABASE_PASSWORD}@{database_hostname}:{config.DATABASE_PORT}/{database_name}"
 
-    if click.confirm(
-        f"Are you sure you want to drop: '{config.DATABASE_HOSTNAME}:{config.DATABASE_NAME}'?"
-    ):
-        drop_database(str(config.SQLALCHEMY_DATABASE_URI))
-        click.secho("Success.", fg="green")
+    if database_exists(str(sqlalchemy_database_uri)):
+        if click.confirm(
+            f"Are you sure you want to drop database: '{database_hostname}:{database_name}'?"
+        ):
+            drop_database(str(sqlalchemy_database_uri))
+            click.secho("Success.", fg="green")
+    else:
+        click.secho(f"Database '{database_hostname}:{database_name}' does not exist!!!", fg="red")
 
 
 @dispatch_database.command("upgrade")
@@ -332,19 +396,13 @@ def drop_database(yes):
 def upgrade_database(tag, sql, revision, revision_type):
     """Upgrades database schema to newest version."""
     import sqlalchemy
-    from sqlalchemy import inspect
-    from sqlalchemy_utils import database_exists
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
+    from sqlalchemy import inspect
+    from sqlalchemy_utils import database_exists
 
     from .database.core import engine
-
-    from .database.manage import (
-        get_core_tables,
-        get_tenant_tables,
-        init_database,
-        setup_fulltext_search,
-    )
+    from .database.manage import init_database
 
     alembic_cfg = AlembicConfig(config.ALEMBIC_INI_PATH)
 
@@ -359,17 +417,6 @@ def upgrade_database(tag, sql, revision, revision_type):
         if "dispatch_core" not in schema_names:
             click.secho("Detected single tenant database, converting to multi-tenant...")
             conn.execute(sqlalchemy.text(open(config.ALEMBIC_MULTI_TENANT_MIGRATION_PATH).read()))
-
-            # init initial triggers
-            conn.execute("set search_path to dispatch_core")
-            setup_fulltext_search(conn, get_core_tables())
-
-            tenant_tables = get_tenant_tables()
-            for t in tenant_tables:
-                t.schema = "dispatch_organization_default"
-
-            conn.execute("set search_path to dispatch_organization_default")
-            setup_fulltext_search(conn, tenant_tables)
 
         if revision_type:
             if revision_type == "core":
@@ -541,6 +588,7 @@ def revision_database(
 ):
     """Create new database revision."""
     import types
+
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
 
@@ -589,27 +637,32 @@ def revision_database(
 def dispatch_scheduler():
     """Container for all dispatch scheduler commands."""
     # we need scheduled tasks to be imported
-    from .document.scheduled import sync_document_terms, create_evergreen_reminders  # noqa
-    from .feedback.scheduled import daily_report  # noqa
-    from .incident.scheduled import daily_report, auto_tagger, close_incident_reminder  # noqa
-    from .incident_cost.scheduled import calculate_incidents_response_cost  # noqa
-    from .report.scheduled import incident_report_reminders  # noqa
-    from .tag.scheduled import sync_tags, build_tag_models  # noqa
-    from .task.scheduled import (
-        create_task_reminders,
-        daily_sync_task,
-        sync_active_stable_tasks,
-    )  # noqa
-    from .term.scheduled import sync_terms  # noqa
-    from .workflow.scheduled import (
-        daily_sync_workflow,  # noqa
-        sync_active_stable_workflows,  # noqa
+    from .case.scheduled import case_close_reminder, case_triage_reminder  # noqa
+    from .case_cost.scheduled import (
+        calculate_cases_response_cost,  # noqa
     )
+    from .data.source.scheduled import sync_sources  # noqa
+    from .document.scheduled import sync_document_terms  # noqa
+    from .evergreen.scheduled import create_evergreen_reminders  # noqa
+    from .feedback.incident.scheduled import feedback_report_daily  # noqa
+    from .feedback.service.scheduled import oncall_shift_feedback  # noqa
+    from .incident.scheduled import (
+        incident_auto_tagger,  # noqa
+    )
+    from .incident_cost.scheduled import calculate_incidents_response_cost  # noqa
+    from .monitor.scheduled import sync_active_stable_monitors  # noqa
+    from .report.scheduled import incident_report_reminders  # noqa
+    from .tag.scheduled import build_tag_models, sync_tags  # noqa
+    from .task.scheduled import (
+        create_incident_tasks_reminders,  # noqa
+    )
+    from .term.scheduled import sync_terms  # noqa
+    from .workflow.scheduled import sync_workflows  # noqa
 
 
 @dispatch_scheduler.command("list")
 def list_tasks():
-    """Prints and runs all currently configured periodic tasks, in seperate event loop."""
+    """Prints and runs all currently configured periodic tasks, in separate event loop."""
     from tabulate import tabulate
 
     table = []
@@ -621,16 +674,25 @@ def list_tasks():
 
 @dispatch_scheduler.command("start")
 @click.argument("tasks", nargs=-1)
+@click.option("--exclude", multiple=True, help="Specifically exclude tasks you do no wish to run.")
 @click.option("--eager", is_flag=True, default=False, help="Run the tasks immediately.")
-def start_tasks(tasks, eager):
+def start_tasks(tasks, exclude, eager):
     """Starts the scheduler."""
+    import signal
+
     from dispatch.common.utils.cli import install_plugins
+    from dispatch.scheduler import stop_scheduler
 
     install_plugins()
 
     if tasks:
         for task in scheduler.registered_tasks:
             if task["name"] not in tasks:
+                scheduler.remove(task)
+
+    if exclude:
+        for task in scheduler.registered_tasks:
+            if task["name"] in exclude:
                 scheduler.remove(task)
 
     if eager:
@@ -641,7 +703,12 @@ def start_tasks(tasks, eager):
                     r_task["func"]()
                     break
             else:
-                click.secho(f"Task not found. TaskName: {task}", fg="red")
+                click.secho(f"A scheduled task/job named {task} does not exist", fg="red")
+
+    # registers a handler to stop future scheduling when encountering sigterm
+    signals = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
+    for s in signals:
+        signal.signal(s, stop_scheduler)
 
     click.secho("Starting scheduler...", fg="blue")
     scheduler.start()
@@ -657,6 +724,7 @@ def dispatch_server():
 def show_routes():
     """Prints all available routes."""
     from tabulate import tabulate
+
     from dispatch.main import api_router
 
     table = []
@@ -669,9 +737,11 @@ def show_routes():
 @dispatch_server.command("config")
 def show_config():
     """Prints the current config as dispatch sees it."""
-    import sys
     import inspect
+    import sys
+
     from tabulate import tabulate
+
     from dispatch import config
 
     func_members = inspect.getmembers(sys.modules[config.__name__])
@@ -695,29 +765,302 @@ def run_server(log_level):
     """Runs a simple server for development."""
     # Uvicorn expects lowercase logging levels; the logging package expects upper.
     os.environ["LOG_LEVEL"] = log_level.upper()
-    if not config.STATIC_DIR:
+    if not os.path.isdir(config.STATIC_DIR):
         import atexit
         from subprocess import Popen
 
         # take our frontend vars and export them for the frontend to consume
         envvars = os.environ.copy()
-        envvars.update({x: getattr(config, x) for x in dir(config) if x.startswith("VUE_APP_")})
-
-        p = Popen(["npm", "run", "serve"], cwd="src/dispatch/static/dispatch", env=envvars)
+        envvars.update({x: getattr(config, x) for x in dir(config) if x.startswith("VITE_")})
+        is_windows = os.name == "nt"
+        windows_cmds = ["cmd", "/c"]
+        default_cmds = ["npm", "run", "serve"]
+        cmds = windows_cmds + default_cmds if is_windows else default_cmds
+        p = Popen(
+            cmds,
+            cwd=os.path.join("src", "dispatch", "static", "dispatch"),
+            env=envvars,
+        )
         atexit.register(p.terminate)
-    uvicorn.run("dispatch.main:app", debug=True, log_level=log_level)
+    uvicorn.run("dispatch.main:app", reload=True, log_level=log_level)
 
 
 dispatch_server.add_command(uvicorn.main, name="start")
 
 
-@dispatch_server.command("slack")
-def run_slack_websocket():
-    """Runs the slack websocket process."""
-    import asyncio
-    from dispatch.plugins.dispatch_slack import socket_mode
+@dispatch_cli.group("signals")
+def signals_group():
+    """All commands for signal consumer manipulation."""
+    pass
 
-    asyncio.run(socket_mode.run_websocket_process())
+
+@signals_group.command("consume")
+def consume_signals():
+    """
+    Runs a continuous process that consumes signals from the specified plugins.
+
+    This function sets up consumer threads for all active signal-consumer plugins
+    across all organizations and projects. It monitors these threads and restarts
+    them if they die. The process can be terminated using SIGINT or SIGTERM.
+
+    Returns:
+        None
+    """
+    from dispatch.common.utils.cli import install_plugins
+    from dispatch.database.core import get_organization_session, get_session
+    from dispatch.organization.service import get_all as get_all_organizations
+    from dispatch.plugin import service as plugin_service
+    from dispatch.project import service as project_service
+
+    install_plugins()
+
+    with get_session() as session:
+        organizations = get_all_organizations(db_session=session)
+
+    for organization in organizations:
+        with get_organization_session(organization.slug) as session:
+            projects = project_service.get_all(db_session=session)
+            for project in projects:
+                plugins = plugin_service.get_active_instances(
+                    db_session=session, plugin_type="signal-consumer", project_id=project.id
+                )
+
+                if not plugins:
+                    log.warning(
+                        f"No signals consumed. No signal-consumer plugins enabled. Project: {project.name}. Organization: {project.organization.name}"
+                    )
+                    continue
+
+                for plugin in plugins:
+                    log.debug(f"Consuming signals for plugin: {plugin.plugin.slug}")
+                    try:
+                        plugin.instance.consume(db_session=session, project=project)
+                    except Exception as e:
+                        log.error(
+                            f"Error consuming signals for plugin: {plugin.plugin.slug}. Error: {e}"
+                        )
+
+
+@signals_group.command("process")
+def process_signals():
+    """Runs a continuous process that does additional processing on newly created signals."""
+    from sqlalchemy import asc
+
+    from dispatch.common.utils.cli import install_plugins
+    from dispatch.database.core import SessionLocal, engine, sessionmaker
+    from dispatch.organization.service import get_all as get_all_organizations
+    from dispatch.signal import flows as signal_flows
+    from dispatch.signal.models import SignalInstance
+
+    install_plugins()
+
+    organizations = get_all_organizations(db_session=SessionLocal())
+    while True:
+        for organization in organizations:
+            schema_engine = engine.execution_options(
+                schema_translate_map={
+                    None: f"dispatch_organization_{organization.slug}",
+                }
+            )
+            db_session = sessionmaker(bind=schema_engine)()
+            signal_instances = (
+                (
+                    db_session.query(SignalInstance)
+                    .filter(SignalInstance.filter_action == None)  # noqa
+                    .filter(SignalInstance.case_id == None)  # noqa
+                )
+                .order_by(asc(SignalInstance.created_at))
+                .limit(500)
+            )
+            for signal_instance in signal_instances:
+                try:
+                    signal_flows.signal_instance_create_flow(
+                        db_session=db_session,
+                        signal_instance_id=signal_instance.id,
+                    )
+                except Exception as e:
+                    log.debug(signal_instance)
+                    log.exception(e)
+            db_session.close()
+
+
+@signals_group.command("perf-test")
+@click.option("--num-instances", default=1, help="Number of signal instances to send.")
+@click.option("--num-workers", default=1, help="Number of threads to use.")
+@click.option(
+    "--api-endpoint",
+    default=f"{DISPATCH_UI_URL}/api/v1/default/signals/instances",
+    required=True,
+    help="API endpoint to send the signal instances to.",
+)
+@click.option(
+    "--api-token",
+    required=True,
+    help="API token to use.",
+)
+@click.option(
+    "--project",
+    default="Test",
+    required=True,
+    help="The Dispatch project to send the instances to.",
+)
+def perf_test(
+    num_instances: int, num_workers: int, api_endpoint: str, api_token: str, project: str
+) -> None:
+    """Performance testing utility for creating signal instances."""
+
+    import concurrent.futures
+    import time
+    import uuid
+
+    import requests
+    from fastapi import status
+
+    NUM_SIGNAL_INSTANCES = num_instances
+    NUM_WORKERS = num_workers
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_token}",
+        }
+    )
+    start_time = time.time()
+
+    def _send_signal_instance(
+        api_endpoint: str,
+        api_token: str,
+        session: requests.Session,
+        signal_instance: dict[str, str],
+    ) -> None:
+        try:
+            r = session.post(
+                api_endpoint,
+                json=signal_instance,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_token}",
+                },
+            )
+            log.info(f"Response: {r.json()}")
+            if r.status_code == status.HTTP_401_UNAUTHORIZED:
+                raise PermissionError(
+                    "Unauthorized. Please check your bearer token. You can find it in the Dev Tools under Request Headers -> Authorization."
+                )
+
+            r.raise_for_status()
+
+        except requests.exceptions.RequestException as e:
+            log.error(f"Unable to send finding. Reason: {e} Response: {r.json() if r else 'N/A'}")
+        else:
+            log.info(f"{signal_instance.get('raw', {}).get('id')} created successfully")
+
+    def send_signal_instances(
+        api_endpoint: str, api_token: str, signal_instances: list[dict[str, str]]
+    ):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = [
+                executor.submit(
+                    _send_signal_instance,
+                    api_endpoint=api_endpoint,
+                    api_token=api_token,
+                    session=session,
+                    signal_instance=signal_instance,
+                )
+                for signal_instance in signal_instances
+            ]
+            results = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+        log.info(f"\nSent {len(results)} of {NUM_SIGNAL_INSTANCES} signal instances")
+
+    signal_instances = [
+        {
+            "project": {"name": project},
+            "raw": {
+                "id": str(uuid.uuid4()),
+                "name": "Test Signal",
+                "slug": "test-signal",
+                "canary": False,
+                "events": [
+                    {
+                        "original": {
+                            "dateint": 20240930,
+                            "distinct_lookupkey_count": 95,
+                        },
+                    },
+                ],
+                "created_at": "2024-09-18T19:47:15Z",
+                "quiet_mode": False,
+                "external_id": "4ebbab36-c703-495f-ae47-7051bdc8b3ef",
+            },
+        },
+    ] * NUM_SIGNAL_INSTANCES
+
+    send_signal_instances(api_endpoint, api_token, signal_instances)
+
+    elapsed_time = time.time() - start_time
+    click.echo(f"Elapsed time: {elapsed_time:.2f} seconds")
+
+
+@dispatch_server.command("slack")
+@click.argument("organization")
+@click.argument("project")
+def run_slack_websocket(organization: str, project: str):
+    """Runs the slack websocket process."""
+    from slack_bolt.adapter.socket_mode import SocketModeHandler
+    from sqlalchemy import true
+
+    from dispatch.common.utils.cli import install_plugins
+    from dispatch.database.core import refetch_db_session
+    from dispatch.plugins.dispatch_slack.bolt import app
+    from dispatch.plugins.dispatch_slack.case.interactive import configure as case_configure
+    from dispatch.plugins.dispatch_slack.incident.interactive import configure as incident_configure
+    from dispatch.plugins.dispatch_slack.workflow import configure as workflow_configure
+    from dispatch.project import service as project_service
+    from dispatch.project.models import ProjectRead
+
+    install_plugins()
+
+    session = refetch_db_session(organization)
+
+    project = project_service.get_by_name_or_raise(
+        db_session=session, project_in=ProjectRead(name=project)
+    )
+
+    instances = (
+        session.query(PluginInstance)
+        .filter(PluginInstance.enabled == true())
+        .filter(PluginInstance.project_id == project.id)
+        .all()
+    )
+
+    instance = None
+    for i in instances:
+        if i.plugin.slug == "slack-conversation":
+            instance: PluginInstance = i
+            break
+
+    if not instance:
+        click.secho(
+            f"No slack plugin has been configured for this organization/plugin. Organization: {organization} Project: {project}",
+            fg="red",
+        )
+        return
+
+    session.close()
+
+    click.secho("Slack websocket process started...", fg="blue")
+    incident_configure(instance.configuration)
+    workflow_configure(instance.configuration)
+    case_configure(instance.configuration)
+
+    app._token = instance.configuration.api_bot_token.get_secret_value()
+
+    handler = SocketModeHandler(
+        app, instance.configuration.socket_mode_app_token.get_secret_value()
+    )
+    handler.start()
 
 
 @dispatch_server.command("shell")
@@ -725,6 +1068,7 @@ def run_slack_websocket():
 def shell(ipython_args):
     """Starts an ipython shell importing our app. Useful for debugging."""
     import sys
+
     import IPython
     from IPython.terminal.ipapp import load_default_config
 

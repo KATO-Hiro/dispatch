@@ -8,13 +8,7 @@ from sqlalchemy.sql.schema import UniqueConstraint
 from sqlalchemy_utils import TSVectorType
 
 from dispatch.database.core import Base
-from dispatch.models import (
-    PrimaryKey,
-    DispatchBase,
-    ProjectMixin,
-    TermNested,
-    TermReadNested,
-)
+from dispatch.models import PrimaryKey, DispatchBase, ProjectMixin, Pagination
 from dispatch.project.models import ProjectRead
 
 # Association tables
@@ -42,7 +36,17 @@ class Definition(Base, ProjectMixin):
     source = Column(String, default="dispatch")
     terms = relationship("Term", secondary=definition_terms, backref="definitions")
     teams = relationship("TeamContact", secondary=definition_teams)
-    search_vector = Column(TSVectorType("text"))
+    search_vector = Column(
+        TSVectorType(
+            "text",
+            regconfig="pg_catalog.simple",
+        )
+    )
+
+
+class DefinitionTerm(DispatchBase):
+    id: Optional[PrimaryKey]
+    text: Optional[str]
 
 
 # Pydantic models...
@@ -52,19 +56,18 @@ class DefinitionBase(DispatchBase):
 
 
 class DefinitionCreate(DefinitionBase):
-    terms: Optional[List[TermNested]] = []
+    terms: Optional[List[DefinitionTerm]] = []
     project: ProjectRead
 
 
 class DefinitionUpdate(DefinitionBase):
-    terms: Optional[List[TermReadNested]] = []
+    terms: Optional[List[DefinitionTerm]] = []
 
 
 class DefinitionRead(DefinitionBase):
     id: PrimaryKey
-    terms: Optional[List[TermReadNested]]
+    terms: Optional[List[DefinitionTerm]]
 
 
-class DefinitionPagination(DispatchBase):
-    total: int
+class DefinitionPagination(Pagination):
     items: List[DefinitionRead] = []

@@ -5,13 +5,12 @@
     :license: Apache, see LICENSE for more details.
 .. moduleauthor:: Kevin Glisson <kglisson@netflix.com>
 """
+
 from dispatch.plugins.base import Plugin
-from dispatch.models import PluginOptionModel
 
 
 class ParticipantGroupPlugin(Plugin):
     type = "participant-group"
-    _schema = PluginOptionModel
 
     def create(self, participants, **kwargs):
         raise NotImplementedError

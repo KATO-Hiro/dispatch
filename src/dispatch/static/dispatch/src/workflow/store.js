@@ -11,9 +11,21 @@ const getDefaultSelectedState = () => {
     resource_id: null,
     parameters: [],
     project: null,
-    plugin_instance: { title: null, slug: null },
+    plugin_instance: null,
     name: null,
     id: null,
+    loading: false,
+    case: null,
+    incident: null,
+  }
+}
+
+const getDefaultSelectedInstanceState = () => {
+  return {
+    run_reason: null,
+    id: null,
+    parameters: [],
+    workflow: { id: null },
     loading: false,
   }
 }
@@ -22,9 +34,13 @@ const state = {
   selected: {
     ...getDefaultSelectedState(),
   },
+  selectedInstance: {
+    ...getDefaultSelectedInstanceState(),
+  },
   dialogs: {
     showCreateEdit: false,
     showRemove: false,
+    showRun: false,
   },
   table: {
     rows: {
@@ -34,7 +50,7 @@ const state = {
     options: {
       q: "",
       page: 1,
-      itemsPerPage: 10,
+      itemsPerPage: 25,
       descending: [false],
       filters: {
         project: [],
@@ -51,7 +67,10 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    let params = SearchUtils.createParametersFromTableOptions(
+      { ...state.table.options },
+      "Workflow"
+    )
     return WorkflowApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)
@@ -67,6 +86,16 @@ const actions = {
     }
     commit("SET_DIALOG_CREATE_EDIT", true)
   },
+  showRun({ commit }, payload) {
+    commit("SET_DIALOG_RUN", true)
+    if (payload.type === "incident") {
+      commit("SET_SELECTED_INSTANCE_INCIDENT", payload.data)
+    } else if (payload.type === "case") {
+      commit("SET_SELECTED_INSTANCE_CASE", payload.data)
+    } else if (payload.type === "signal") {
+      commit("SET_SELECTED_INSTANCE_SIGNAL", payload.data)
+    }
+  },
   removeShow({ commit }, workflow) {
     commit("SET_DIALOG_DELETE", true)
     commit("SET_SELECTED", workflow)
@@ -75,9 +104,44 @@ const actions = {
     commit("SET_DIALOG_CREATE_EDIT", false)
     commit("RESET_SELECTED")
   },
+  closeCreateEditDialog({ commit }) {
+    commit("SET_DIALOG_CREATE_EDIT", false)
+    commit("RESET_SELECTED")
+  },
   closeRemove({ commit }) {
     commit("SET_DIALOG_DELETE", false)
     commit("RESET_SELECTED")
+  },
+  closeRun({ commit }) {
+    commit("SET_DIALOG_RUN", false)
+    commit("RESET_SELECTED_INSTANCE")
+  },
+  run({ commit }) {
+    let payload = { ...state.selectedInstance }
+    commit("SET_SELECTED_INSTANCE_LOADING", true)
+    return WorkflowApi.run(state.selectedInstance.workflow.id, payload)
+      .then((response) => {
+        commit("SET_SELECTED_INSTANCE_LOADING", false)
+        commit("SET_SELECTED_INSTANCE", response.data)
+        var interval = setInterval(function () {
+          if (state.selectedInstance.id == null) {
+            clearInterval(interval)
+            return
+          }
+          WorkflowApi.getInstance(state.selectedInstance.id).then((response) => {
+            commit("SET_SELECTED_INSTANCE", response.data)
+          })
+
+          if (state.selectedInstance.status == "Completed") {
+            clearInterval(interval)
+          }
+        }, 5000)
+        return response.data
+      })
+      .catch(() => {
+        commit("SET_SELECTED_INSTANCE_LOADING", false)
+        commit("RESET_SELECTED_INSTANCE")
+      })
   },
   save({ commit, dispatch }) {
     commit("SET_SELECTED_LOADING", true)
@@ -134,6 +198,12 @@ const mutations = {
   SET_SELECTED_LOADING(state, value) {
     state.selected.loading = value
   },
+  SET_SELECTED_INSTANCE(state, value) {
+    state.selectedInstance = Object.assign(state.selectedInstance, value)
+  },
+  SET_SELECTED_INSTANCE_LOADING(state, value) {
+    state.selectedInstance.loading = value
+  },
   SET_TABLE_LOADING(state, value) {
     state.table.loading = value
   },
@@ -145,6 +215,22 @@ const mutations = {
   },
   SET_DIALOG_DELETE(state, value) {
     state.dialogs.showRemove = value
+  },
+  SET_DIALOG_RUN(state, value) {
+    state.dialogs.showRun = value
+  },
+  SET_SELECTED_INSTANCE_CASE(state, value) {
+    state.selectedInstance.case = value
+  },
+  SET_SELECTED_INSTANCE_INCIDENT(state, value) {
+    state.selectedInstance.incident = value
+  },
+  SET_SELECTED_INSTANCE_SIGNAL(state, value) {
+    state.selectedInstance.signal = value
+  },
+  RESET_SELECTED_INSTANCE(state) {
+    // do not reset project
+    state.selectedInstance = { ...getDefaultSelectedInstanceState() }
   },
   RESET_SELECTED(state) {
     // do not reset project

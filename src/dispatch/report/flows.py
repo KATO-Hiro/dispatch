@@ -4,10 +4,10 @@ from datetime import date
 
 from pydantic.error_wrappers import ErrorWrapper, ValidationError
 
-from dispatch.enums import DocumentResourceTemplateTypes
 from dispatch.decorators import background_task
 from dispatch.document import service as document_service
 from dispatch.document.models import DocumentCreate
+from dispatch.enums import DocumentResourceTypes
 from dispatch.event import service as event_service
 from dispatch.exceptions import InvalidConfigurationError
 from dispatch.incident import service as incident_service
@@ -32,6 +32,7 @@ def create_tactical_report(
     user_email: str,
     incident_id: int,
     tactical_report_in: TacticalReportCreate,
+    organization_slug: str = None,
     db_session=None,
 ):
     """Creates and sends a new tactical report to a conversation."""
@@ -60,13 +61,14 @@ def create_tactical_report(
     db_session.add(incident)
     db_session.commit()
 
-    event_service.log(
+    event_service.log_incident_event(
         db_session=db_session,
         source="Incident Participant",
         description=f"{participant.individual.name} created a new tactical report",
         details={"conditions": conditions, "actions": actions, "needs": needs},
         incident_id=incident_id,
         individual_id=participant.individual.id,
+        owner=participant.individual.name,
     )
 
     # we send the tactical report to the conversation
@@ -87,7 +89,6 @@ def create_executive_report(
     db_session=None,
 ):
     """Creates an executive report."""
-
     current_date = date.today().strftime("%B %d, %Y")
 
     current_status = executive_report_in.current_status
@@ -140,13 +141,14 @@ def create_executive_report(
     db_session.add(incident)
     db_session.commit()
 
-    event_service.log(
+    event_service.log_incident_event(
         db_session=db_session,
         source="Incident Participant",
         description=f"{participant.individual.name} created a new executive report",
         details={"current_status": current_status, "overview": overview, "next_steps": next_steps},
         incident_id=incident_id,
         individual_id=participant.individual.id,
+        owner=participant.individual.name,
     )
 
     # we create a new document for the executive report
@@ -163,7 +165,8 @@ def create_executive_report(
     executive_report_document.update(
         {
             "name": executive_report_document_name,
-            "resource_type": DocumentResourceTemplateTypes.executive,
+            "description": incident.incident_type.executive_template_document.description,
+            "resource_type": DocumentResourceTypes.executive,
         }
     )
 
@@ -171,7 +174,7 @@ def create_executive_report(
         new_folder_id=incident.storage.resource_id, file_id=executive_report_document["id"]
     )
 
-    event_service.log(
+    event_service.log_incident_event(
         db_session=db_session,
         source=storage_plugin.plugin.title,
         description="Executive report document added to storage",
@@ -180,6 +183,7 @@ def create_executive_report(
 
     document_in = DocumentCreate(
         name=executive_report_document["name"],
+        description=executive_report_document["description"],
         resource_id=executive_report_document["id"],
         resource_type=executive_report_document["resource_type"],
         project=incident.project,
@@ -195,7 +199,7 @@ def create_executive_report(
     db_session.add(incident)
     db_session.commit()
 
-    event_service.log(
+    event_service.log_incident_event(
         db_session=db_session,
         source="Dispatch Core App",
         description="Executive report document added to incident",

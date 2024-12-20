@@ -1,25 +1,23 @@
 import os
 import logging
-from sqlalchemy import text
-from sqlalchemy.schema import CreateSchema
-
-from dispatch.search import fulltext
-from dispatch.search.fulltext import (
-    sync_trigger,
-)
-from sqlalchemy_utils import create_database, database_exists
 
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 
+from sqlalchemy import text
+from sqlalchemy.schema import CreateSchema
+from sqlalchemy_utils import create_database, database_exists
+
 from dispatch import config
-from dispatch.project.models import ProjectCreate
 from dispatch.organization.models import Organization
-from dispatch.project import service as project_service
+from dispatch.project.models import Project
+from dispatch.plugin.models import Plugin
+from dispatch.search import fulltext
+from dispatch.search.fulltext import (
+    sync_trigger,
+)
 
 from .core import Base, sessionmaker
-
-
 from .enums import DISPATCH_ORGANIZATION_SCHEMA_PREFIX
 
 
@@ -36,7 +34,7 @@ def version_schema(script_location: str):
 
 
 def get_core_tables():
-    """Fetches tables are belong to the 'dispatch_core' schema."""
+    """Fetches tables that belong to the 'dispatch_core' schema."""
     core_tables = []
     for _, table in Base.metadata.tables.items():
         if table.schema == "dispatch_core":
@@ -54,7 +52,7 @@ def get_tenant_tables():
 
 
 def init_database(engine):
-    """Initializes a the database."""
+    """Initializes the database."""
     if not database_exists(str(config.SQLALCHEMY_DATABASE_URI)):
         create_database(str(config.SQLALCHEMY_DATABASE_URI))
 
@@ -74,24 +72,71 @@ def init_database(engine):
     session = sessionmaker(bind=engine)
     db_session = session()
 
-    # default organization
-    organization = Organization(
-        name="default",
-        slug="default",
-        default=True,
-        description="Default dispatch organization.",
+    # we create the default organization if it doesn't exist
+    organization = (
+        db_session.query(Organization).filter(Organization.name == "default").one_or_none()
     )
+    if not organization:
+        print("Creating default organization...")
+        organization = Organization(
+            name="default",
+            slug="default",
+            default=True,
+            description="Default Dispatch organization.",
+        )
 
-    db_session.add(organization)
+        db_session.add(organization)
+        db_session.commit()
+
+    # we initialize the database schema
+    init_schema(engine=engine, organization=organization)
+
+    # we install all plugins
+    from dispatch.common.utils.cli import install_plugins
+    from dispatch.plugins.base import plugins
+
+    install_plugins()
+
+    for p in plugins.all():
+        plugin = Plugin(
+            title=p.title,
+            slug=p.slug,
+            type=p.type,
+            version=p.version,
+            author=p.author,
+            author_url=p.author_url,
+            multiple=p.multiple,
+            description=p.description,
+        )
+        db_session.add(plugin)
     db_session.commit()
 
-    init_schema(engine=engine, organization=organization)
+    # we create the default project if it doesn't exist
+    project = db_session.query(Project).filter(Project.name == "default").one_or_none()
+    if not project:
+        print("Creating default project...")
+        project = Project(
+            name="default",
+            default=True,
+            description="Default Dispatch project.",
+            organization=organization,
+        )
+        db_session.add(project)
+        db_session.commit()
+
+        # we initialize the project with defaults
+        from dispatch.project import flows as project_flows
+
+        print("Initializing default project...")
+        project_flows.project_init_flow(
+            project_id=project.id, organization_slug=organization.slug, db_session=db_session
+        )
 
 
 def init_schema(*, engine, organization: Organization):
-    """Initializing a new schema."""
-
+    """Initializes a new schema."""
     schema_name = f"{DISPATCH_ORGANIZATION_SCHEMA_PREFIX}_{organization.slug}"
+
     if not engine.dialect.has_schema(engine, schema_name):
         with engine.connect() as connection:
             connection.execute(CreateSchema(schema_name))
@@ -121,22 +166,14 @@ def init_schema(*, engine, organization: Organization):
     session = sessionmaker(bind=schema_engine)
     db_session = session()
 
-    # create any required default values in schema here
-    #
-    #
-    project_service.get_or_create(
-        db_session=db_session,
-        project_in=ProjectCreate(
-            name="default",
-            default=True,
-            description="Default dispatch project.",
-            organization=organization,
-        ),
-    )
+    organization = db_session.merge(organization)
+    db_session.add(organization)
+    db_session.commit()
+    return organization
 
 
 def setup_fulltext_search(connection, tables):
-    """Syncs any required fulltext table triggers/functions."""
+    """Syncs any required fulltext table triggers and functions."""
     # parsing functions
     function_path = os.path.join(
         os.path.dirname(os.path.abspath(fulltext.__file__)), "expressions.sql"

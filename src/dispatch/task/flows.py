@@ -6,6 +6,7 @@
 
 .. moduleauthor:: Kevin Glisson <kglisson@netflix.com>
 """
+
 import logging
 from collections import defaultdict
 from datetime import datetime
@@ -35,10 +36,12 @@ def group_tasks_by_assignee(tasks):
     return grouped
 
 
-def create_reminder(db_session, assignee_email, tasks, contact_fullname, contact_weblink):
+def create_reminder(db_session, assignee_email, tasks, project_id):
     """Contains the logic for incident task reminders."""
     # send email
-    plugin = plugin_service.get_active_instance(db_session=db_session, plugin_type="email")
+    plugin = plugin_service.get_active_instance(
+        db_session=db_session, plugin_type="email", project_id=project_id
+    )
     if not plugin:
         log.warning("Task reminder not sent. No email plugin enabled.")
         return
@@ -61,17 +64,22 @@ def create_reminder(db_session, assignee_email, tasks, contact_fullname, contact
     notification_template = INCIDENT_TASK_REMINDER
     notification_type = "incident-task-reminder"
     name = subject = notification_text = "Incident Task Reminder"
-    plugin.instance.send(
-        assignee_email,
-        notification_text,
-        notification_template,
-        notification_type,
-        name=name,
-        subject=subject,
-        contact_fullname=contact_fullname,
-        contact_weblink=contact_weblink,
-        items=items,  # plugin expect dicts
-    )
+
+    # Can raise exception "tenacity.RetryError: RetryError". (Email may still go through).
+    try:
+        plugin.instance.send(
+            assignee_email,
+            notification_text,
+            notification_template,
+            notification_type,
+            name=name,
+            subject=subject,
+            items=items,  # plugin expect dicts
+        )
+    except Exception as e:
+        log.error(
+            f"Error in sending {notification_text} email to {assignee_email}: {e}. Items: {items}"
+        )
 
     for task in tasks:
         task.last_reminder_at = datetime.utcnow()
@@ -91,19 +99,28 @@ def send_task_notification(
     # we send a notification to the incident conversation
     notification_text = "Incident Notification"
     notification_type = "incident-notification"
+
     plugin = plugin_service.get_active_instance(
         db_session=db_session, project_id=incident.project.id, plugin_type="conversation"
     )
-    plugin.instance.send(
-        incident.conversation.channel_id,
-        notification_text,
-        message_template,
-        notification_type,
-        task_creator=creator.individual.email,
-        task_assignees=[x.individual.email for x in assignees],
-        task_description=description,
-        task_weblink=weblink,
-    )
+
+    if not plugin:
+        log.warning("Task notification not sent. No conversation plugin enabled.")
+        return
+
+    task_assignees = [x.individual.email for x in assignees]
+
+    for assignee in task_assignees:
+        plugin.instance.send_ephemeral(
+            incident.conversation.channel_id,
+            assignee,
+            notification_text,
+            message_template=message_template,
+            notification_type=notification_type,
+            task_creator=creator.individual.email,
+            task_description=description,
+            task_weblink=weblink,
+        )
 
 
 def create_or_update_task(

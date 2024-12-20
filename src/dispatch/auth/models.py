@@ -2,30 +2,30 @@ import string
 import secrets
 from typing import List
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import bcrypt
 from jose import jwt
 from typing import Optional
 from pydantic import validator, Field
 from pydantic.networks import EmailStr
-from dispatch.models import PrimaryKey
 
-from sqlalchemy import Column, String, LargeBinary, Integer
+from sqlalchemy import DateTime, Column, String, LargeBinary, Integer, Boolean
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql.schema import ForeignKey
 from sqlalchemy_utils import TSVectorType
-
-from dispatch.database.core import Base
-from dispatch.models import TimeStampMixin, DispatchBase
-from dispatch.enums import UserRoles
 
 from dispatch.config import (
     DISPATCH_JWT_SECRET,
     DISPATCH_JWT_ALG,
     DISPATCH_JWT_EXP,
 )
-from dispatch.project.models import Project, ProjectRead
+from dispatch.database.core import Base
+from dispatch.enums import DispatchEnum, UserRoles
+from dispatch.models import OrganizationSlug, PrimaryKey, TimeStampMixin, DispatchBase, Pagination
 from dispatch.organization.models import Organization, OrganizationRead
+from dispatch.project.models import Project, ProjectRead
 
 
 def generate_password():
@@ -55,8 +55,15 @@ class DispatchUser(Base, TimeStampMixin):
     id = Column(Integer, primary_key=True)
     email = Column(String, unique=True)
     password = Column(LargeBinary, nullable=False)
+    last_mfa_time = Column(DateTime, nullable=True)
+    experimental_features = Column(Boolean, default=False)
 
-    search_vector = Column(TSVectorType("email", weights={"email": "A"}))
+    # relationships
+    events = relationship("Event", backref="dispatch_user")
+
+    search_vector = Column(
+        TSVectorType("email", regconfig="pg_catalog.simple", weights={"email": "A"})
+    )
 
     def check_password(self, password):
         return bcrypt.checkpw(password.encode("utf-8"), self.password)
@@ -71,10 +78,10 @@ class DispatchUser(Base, TimeStampMixin):
         }
         return jwt.encode(data, DISPATCH_JWT_SECRET, algorithm=DISPATCH_JWT_ALG)
 
-    def get_organization_role(self, organization_name):
-        """Gets the users role for a given organization."""
+    def get_organization_role(self, organization_slug: OrganizationSlug):
+        """Gets the user's role for a given organization slug."""
         for o in self.organizations:
-            if o.organization.name == organization_name:
+            if o.organization.slug == organization_slug:
                 return o.role
 
 
@@ -96,13 +103,15 @@ class DispatchUserProject(Base, TimeStampMixin):
     project_id = Column(Integer, ForeignKey(Project.id), primary_key=True)
     project = relationship(Project, backref="users")
 
+    default = Column(Boolean, default=False)
+
     role = Column(String, nullable=False, default=UserRoles.member)
 
 
 class UserProject(DispatchBase):
     project: ProjectRead
     default: Optional[bool] = False
-    role: str
+    role: Optional[str] = Field(None, nullable=True)
 
 
 class UserOrganization(DispatchBase):
@@ -114,6 +123,7 @@ class UserOrganization(DispatchBase):
 class UserBase(DispatchBase):
     email: EmailStr
     projects: Optional[List[UserProject]] = []
+    organizations: Optional[List[UserOrganization]] = []
 
     @validator("email")
     def email_required(cls, v):
@@ -143,12 +153,14 @@ class UserRegister(UserLogin):
 
 
 class UserLoginResponse(DispatchBase):
+    projects: Optional[List[UserProject]]
     token: Optional[str] = Field(None, nullable=True)
 
 
 class UserRead(UserBase):
     id: PrimaryKey
     role: Optional[str] = Field(None, nullable=True)
+    experimental_features: Optional[bool]
 
 
 class UserUpdate(DispatchBase):
@@ -156,9 +168,22 @@ class UserUpdate(DispatchBase):
     password: Optional[str] = Field(None, nullable=True)
     projects: Optional[List[UserProject]]
     organizations: Optional[List[UserOrganization]]
+    experimental_features: Optional[bool]
     role: Optional[str] = Field(None, nullable=True)
 
-    @validator("password", pre=True, always=True)
+    @validator("password", pre=True)
+    def hash(cls, v):
+        return hash_password(str(v))
+
+
+class UserCreate(DispatchBase):
+    email: EmailStr
+    password: Optional[str] = Field(None, nullable=True)
+    projects: Optional[List[UserProject]]
+    organizations: Optional[List[UserOrganization]]
+    role: Optional[str] = Field(None, nullable=True)
+
+    @validator("password", pre=True)
     def hash(cls, v):
         return hash_password(str(v))
 
@@ -167,6 +192,33 @@ class UserRegisterResponse(DispatchBase):
     token: Optional[str] = Field(None, nullable=True)
 
 
-class UserPagination(DispatchBase):
-    total: int
+class UserPagination(Pagination):
     items: List[UserRead] = []
+
+
+class MfaChallengeStatus(DispatchEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    EXPIRED = "expired"
+
+
+class MfaChallenge(Base, TimeStampMixin):
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    valid = Column(Boolean, default=False)
+    reason = Column(String, nullable=True)
+    action = Column(String)
+    status = Column(String, default=MfaChallengeStatus.PENDING)
+    challenge_id = Column(UUID(as_uuid=True), default=uuid4, unique=True)
+    dispatch_user_id = Column(Integer, ForeignKey(DispatchUser.id), nullable=False)
+    dispatch_user = relationship(DispatchUser, backref="mfa_challenges")
+
+
+class MfaPayloadResponse(DispatchBase):
+    status: str
+
+
+class MfaPayload(DispatchBase):
+    action: str
+    project_id: int
+    challenge_id: str

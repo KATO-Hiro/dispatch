@@ -1,7 +1,8 @@
 """
-Originally authoried by:
+Originally authored by:
 https://github.com/kvesteri/sqlalchemy-searchable/blob/master/sqlalchemy_searchable
 """
+
 import os
 from functools import reduce
 
@@ -96,6 +97,10 @@ class SQLConstruct(object):
         return options
 
     @property
+    def schema_name(self):
+        return self.table.schema
+
+    @property
     def table_name(self):
         if self.table.schema:
             return '%s."%s"' % (self.table.schema, self.table.name)
@@ -147,7 +152,7 @@ class CreateSearchFunctionSQL(SQLConstruct):
     def __str__(self):
         return (
             """CREATE OR REPLACE FUNCTION
-                {search_trigger_function_name}() RETURNS TRIGGER AS $$
+                {schema_name}.{search_trigger_function_name}() RETURNS TRIGGER AS $$
             BEGIN
                 NEW.{search_vector_name} = {ts_vector};
                 RETURN NEW;
@@ -155,6 +160,7 @@ class CreateSearchFunctionSQL(SQLConstruct):
             $$ LANGUAGE 'plpgsql';
             """
         ).format(
+            schema_name=self.schema_name,
             search_trigger_function_name=self.search_function_name,
             search_vector_name=self.tsvector_column.name,
             ts_vector=self.search_vector,
@@ -167,7 +173,7 @@ class CreateSearchTriggerSQL(SQLConstruct):
         if self.options["weights"] or any(
             getattr(self.table.c, column) in vectorizer for column in self.indexed_columns
         ):
-            return self.search_function_name + "()"
+            return self.schema_name + "." + self.search_function_name + "()"
         return "tsvector_update_trigger({arguments})".format(
             arguments=", ".join(
                 [self.tsvector_column.name, "'%s'" % self.options["regconfig"]]
@@ -190,7 +196,7 @@ class CreateSearchTriggerSQL(SQLConstruct):
 
 class DropSearchFunctionSQL(SQLConstruct):
     def __str__(self):
-        return "DROP FUNCTION IF EXISTS %s()" % self.search_function_name
+        return "DROP FUNCTION IF EXISTS %s.%s()" % (self.schema_name, self.search_function_name)
 
 
 class DropSearchTriggerSQL(SQLConstruct):
@@ -209,9 +215,10 @@ class SearchManager:
         "weights": (),
     }
 
-    def __init__(self, options={}):
+    def __init__(self, options=None):
         self.options = self.default_options
-        self.options.update(options)
+        if options:
+            self.options.update(options)
         self.processed_columns = []
         self.classes = set()
         self.listeners = []
@@ -382,12 +389,12 @@ def sync_trigger(conn, table, tsvector_column, indexed_columns, metadata=None, o
     """
     if metadata is None:
         metadata = MetaData()
-    params = dict(
-        tsvector_column=getattr(table.c, tsvector_column),
-        indexed_columns=indexed_columns,
-        options=options,
-        conn=conn,
-    )
+    params = {
+        "tsvector_column": getattr(table.c, tsvector_column),
+        "indexed_columns": indexed_columns,
+        "options": options,
+        "conn": conn,
+    }
     classes = [
         DropSearchTriggerSQL,
         DropSearchFunctionSQL,
@@ -433,7 +440,11 @@ def drop_trigger(conn, table_name, tsvector_column, metadata=None, options=None)
     if metadata is None:
         metadata = MetaData()
     table = Table(table_name, metadata, autoload=True, autoload_with=conn)
-    params = dict(tsvector_column=getattr(table.c, tsvector_column), options=options, conn=conn)
+    params = {
+        "tsvector_column": getattr(table.c, tsvector_column),
+        "options": options,
+        "conn": conn,
+    }
     classes = [
         DropSearchTriggerSQL,
         DropSearchFunctionSQL,
@@ -450,8 +461,9 @@ with open(os.path.join(path, "expressions.sql")) as file:
     sql_expressions = DDL(file.read())
 
 
-def make_searchable(metadata, mapper=orm.mapper, manager=search_manager, options={}):
-    manager.options.update(options)
+def make_searchable(metadata, mapper=orm.mapper, manager=search_manager, options=None):
+    if options:
+        manager.options.update(options)
     event.listen(mapper, "instrument_class", manager.process_mapper)
     # event.listen(mapper, "after_configured", manager.attach_ddl_listeners)
     event.listen(metadata, "before_create", sql_expressions)

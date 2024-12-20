@@ -1,18 +1,25 @@
 import time
 import logging
 from os import path
+from uuid import uuid1
+from typing import Optional, Final
+from contextvars import ContextVar
 
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 from pydantic.error_wrappers import ValidationError
 
 from sentry_asgi import SentryMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import inspect
+from sqlalchemy.orm import scoped_session
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.routing import compile_path
+from starlette.middleware.gzip import GZipMiddleware
 
-from starlette.responses import Response, FileResponse
+from starlette.responses import Response, StreamingResponse, FileResponse
 from starlette.staticfiles import StaticFiles
 
 from .api import api_router
@@ -24,6 +31,7 @@ from .database.core import engine, sessionmaker
 from .extensions import configure_extensions
 from .logging import configure_logging
 from .metrics import provider as metric_provider
+from .rate_limiter import limiter
 
 
 log = logging.getLogger(__name__)
@@ -44,10 +52,14 @@ async def not_found(request, exc):
 exception_handlers = {404: not_found}
 
 # we create the ASGI for the app
-app = FastAPI(exception_handlers=exception_handlers)
+app = FastAPI(exception_handlers=exception_handlers, openapi_url="")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # we create the ASGI for the frontend
-frontend = FastAPI()
+frontend = FastAPI(openapi_url="")
+frontend.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @frontend.middleware("http")
@@ -68,14 +80,14 @@ api = FastAPI(
     openapi_url="/docs/openapi.json",
     redoc_url="/docs",
 )
+api.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 def get_path_params_from_request(request: Request) -> str:
     path_params = {}
     for r in api_router.routes:
         path_regex, path_format, param_converters = compile_path(r.path)
-        # remove the /api/v1 for matching
-        path = f"/{request['path'].strip('/api/v1')}"
+        path = request["path"].removeprefix("/api/v1")  # remove the /api/v1 for matching
         match = path_regex.match(path)
         if match:
             path_params = match.groupdict()
@@ -84,49 +96,56 @@ def get_path_params_from_request(request: Request) -> str:
 
 def get_path_template(request: Request) -> str:
     if hasattr(request, "path"):
-        return ",".join(request.path.split("/")[1:4])
-    return ".".join(request.url.path.split("/")[1:4])
+        return ",".join(request.path.split("/")[1:])
+    return ".".join(request.url.path.split("/")[1:])
+
+
+REQUEST_ID_CTX_KEY: Final[str] = "request_id"
+_request_id_ctx_var: ContextVar[Optional[str]] = ContextVar(REQUEST_ID_CTX_KEY, default=None)
+
+
+def get_request_id() -> Optional[str]:
+    return _request_id_ctx_var.get()
 
 
 @api.middleware("http")
 async def db_session_middleware(request: Request, call_next):
+    request_id = str(uuid1())
+
+    # we create a per-request id such that we can ensure that our session is scoped for a particular request.
+    # see: https://github.com/tiangolo/fastapi/issues/726
+    ctx_token = _request_id_ctx_var.set(request_id)
     path_params = get_path_params_from_request(request)
 
     # if this call is organization specific set the correct search path
-    organization_slug = path_params.get("organization")
-    if organization_slug:
-        request.state.organization = organization_slug
-        schema = f"dispatch_organization_{organization_slug}"
-        # validate slug exists
-        schema_names = inspect(engine).get_schema_names()
-        if schema in schema_names:
-            # add correct schema mapping depending on the request
-            schema_engine = engine.execution_options(
-                schema_translate_map={
-                    None: schema,
-                }
-            )
-        else:
-            return JSONResponse(
-                status_code=status.HTTP_403_FORBIDDEN,
-                content={"detail": [{"msg": "Forbidden"}]},
-            )
-    else:
+    organization_slug = path_params.get("organization", "default")
+    request.state.organization = organization_slug
+    schema = f"dispatch_organization_{organization_slug}"
+    # validate slug exists
+    schema_names = inspect(engine).get_schema_names()
+    if schema in schema_names:
         # add correct schema mapping depending on the request
-        # can we set some default here?
-        request.state.organization = "default"
         schema_engine = engine.execution_options(
             schema_translate_map={
-                None: "dispatch_organization_default",
+                None: schema,
             }
         )
+    else:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": [{"msg": f"Unknown database schema name: {schema}"}]},
+        )
+
     try:
-        session = sessionmaker(bind=schema_engine)
+        session = scoped_session(sessionmaker(bind=schema_engine), scopefunc=get_request_id)
         request.state.db = session()
         response = await call_next(request)
+    except Exception as e:
+        raise e from None
     finally:
         request.state.db.close()
 
+    _request_id_ctx_var.reset(ctx_token)
     return response
 
 
@@ -148,28 +167,37 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             start = time.perf_counter()
             response = await call_next(request)
             elapsed_time = time.perf_counter() - start
+            tags.update({"status_code": response.status_code})
+            metric_provider.counter("server.call.counter", tags=tags)
+            metric_provider.timer("server.call.elapsed", value=elapsed_time, tags=tags)
+            log.debug(f"server.call.elapsed.{path_template}: {elapsed_time}")
         except Exception as e:
             metric_provider.counter("server.call.exception.counter", tags=tags)
             raise e from None
-        else:
-            tags.update({"status_code": response.status_code})
-            metric_provider.timer("server.call.elapsed", value=elapsed_time, tags=tags)
-            metric_provider.counter("server.call.counter", tags=tags)
-
         return response
 
 
 class ExceptionMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> StreamingResponse:
         try:
             response = await call_next(request)
         except ValidationError as e:
+            log.exception(e)
             response = JSONResponse(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": e.errors()}
             )
-        except ValueError:
+        except ValueError as e:
+            log.exception(e)
             response = JSONResponse(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content={"detail": [{"msg": "Unknown", "loc": ["Unknown"], "type": "Unknown"}]},
+            )
+        except Exception as e:
+            log.exception(e)
+            response = JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"detail": [{"msg": "Unknown", "loc": ["Unknown"], "type": "Unknown"}]},
             )
 
@@ -194,7 +222,7 @@ install_plugin_events(api_router)
 api.include_router(api_router)
 
 # we mount the frontend and app
-if STATIC_DIR:
+if STATIC_DIR and path.isdir(STATIC_DIR):
     frontend.mount("/", StaticFiles(directory=STATIC_DIR), name="app")
 
 app.mount("/api/v1", app=api)

@@ -7,12 +7,12 @@ from sqlalchemy_utils import TSVectorType
 
 from dispatch.database.core import Base
 from dispatch.models import (
-    DefinitionNested,
-    DefinitionReadNested,
     DispatchBase,
     ProjectMixin,
     PrimaryKey,
+    Pagination,
 )
+from dispatch.definition.models import DefinitionRead
 from dispatch.project.models import ProjectRead
 
 
@@ -22,7 +22,12 @@ class Term(Base, ProjectMixin):
     id = Column(Integer, primary_key=True)
     text = Column(String)
     discoverable = Column(Boolean, default=True)
-    search_vector = Column(TSVectorType("text"))
+    search_vector = Column(
+        TSVectorType(
+            "text",
+            regconfig="pg_catalog.simple",
+        )
+    )
 
 
 # Pydantic models...
@@ -33,19 +38,18 @@ class TermBase(DispatchBase):
 
 
 class TermCreate(TermBase):
-    definitions: Optional[List[DefinitionNested]] = []
+    definitions: Optional[List[DefinitionRead]] = []
     project: ProjectRead
 
 
 class TermUpdate(TermBase):
-    definitions: Optional[List[DefinitionNested]] = []
+    definitions: Optional[List[DefinitionRead]] = []
 
 
 class TermRead(TermBase):
     id: PrimaryKey
-    definitions: Optional[List[DefinitionReadNested]] = []
+    definitions: Optional[List[DefinitionRead]] = []
 
 
-class TermPagination(DispatchBase):
-    total: int
+class TermPagination(Pagination):
     items: List[TermRead] = []

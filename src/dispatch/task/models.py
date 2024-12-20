@@ -8,23 +8,22 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
-    String,
-    event,
-    Table,
     PrimaryKeyConstraint,
+    String,
+    Table,
+    event,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql.schema import UniqueConstraint
 from sqlalchemy_utils import TSVectorType
 
 from dispatch.database.core import Base
-from dispatch.config import INCIDENT_RESOURCE_INCIDENT_TASK
-from dispatch.models import DispatchBase, ResourceBase, ResourceMixin, PrimaryKey
-
-from dispatch.project.models import ProjectRead
-from dispatch.incident.models import IncidentReadNested
-from dispatch.ticket.models import TicketRead
+from dispatch.incident.models import IncidentReadBasic
+from dispatch.models import ResourceBase, ResourceMixin, PrimaryKey, Pagination
 from dispatch.participant.models import ParticipantRead, ParticipantUpdate
+from dispatch.project.models import ProjectRead
+from dispatch.ticket.models import TicketRead
 
 from .enums import TaskSource, TaskStatus, TaskPriority
 
@@ -48,16 +47,9 @@ assoc_task_assignees = Table(
     PrimaryKeyConstraint("participant_id", "task_id"),
 )
 
-assoc_task_tickets = Table(
-    "task_tickets",
-    Base.metadata,
-    Column("ticket_id", Integer, ForeignKey("ticket.id", ondelete="CASCADE")),
-    Column("task_id", Integer, ForeignKey("task.id", ondelete="CASCADE")),
-    PrimaryKeyConstraint("ticket_id", "task_id"),
-)
-
 
 class Task(Base, ResourceMixin):
+    __table_args__ = (UniqueConstraint("resource_id", "incident_id"),)
     id = Column(Integer, primary_key=True)
     resolved_at = Column(DateTime)
     resolve_by = Column(DateTime, default=default_resolution_time)
@@ -74,11 +66,14 @@ class Task(Base, ResourceMixin):
     priority = Column(String, default=TaskPriority.low)
     status = Column(String, default=TaskStatus.open)
     reminders = Column(Boolean, default=True)
+    ticket = relationship("Ticket", uselist=False, backref="task", cascade="all, delete-orphan")
 
-    # relationships
-    tickets = relationship("Ticket", secondary=assoc_task_tickets, backref="tasks")
-
-    search_vector = Column(TSVectorType("description"))
+    search_vector = Column(
+        TSVectorType(
+            "description",
+            regconfig="pg_catalog.simple",
+        )
+    )
 
     @hybrid_property
     def project(self):
@@ -100,7 +95,7 @@ class TaskBase(ResourceBase):
     created_at: Optional[datetime]
     creator: Optional[ParticipantRead]
     description: Optional[str] = Field(None, nullable=True)
-    incident: IncidentReadNested
+    incident: IncidentReadBasic
     owner: Optional[ParticipantRead]
     priority: Optional[str] = Field(None, nullable=True)
     resolve_by: Optional[datetime]
@@ -108,7 +103,6 @@ class TaskBase(ResourceBase):
     resource_id: Optional[str] = Field(None, nullable=True)
     source: Optional[str] = Field(None, nullable=True)
     status: TaskStatus = TaskStatus.open
-    tickets: Optional[List[TicketRead]] = []
     updated_at: Optional[datetime]
 
 
@@ -116,7 +110,7 @@ class TaskCreate(TaskBase):
     assignees: List[Optional[ParticipantUpdate]] = []
     creator: Optional[ParticipantUpdate]
     owner: Optional[ParticipantUpdate]
-    resource_type: Optional[str] = INCIDENT_RESOURCE_INCIDENT_TASK
+    resource_type: Optional[str]
     status: TaskStatus = TaskStatus.open
 
 
@@ -129,8 +123,8 @@ class TaskUpdate(TaskBase):
 class TaskRead(TaskBase):
     id: PrimaryKey
     project: Optional[ProjectRead]
+    ticket: Optional[TicketRead] = None
 
 
-class TaskPagination(DispatchBase):
-    total: int
+class TaskPagination(Pagination):
     items: List[TaskRead] = []

@@ -50,9 +50,9 @@ const state = {
       },
       q: "",
       page: 1,
-      itemsPerPage: 10,
-      sortBy: ["status"],
-      descending: [false],
+      itemsPerPage: 25,
+      sortBy: ["created_at"],
+      descending: [true],
     },
     loading: false,
     bulkEditLoading: false,
@@ -66,7 +66,7 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options }, "Task")
     return TaskApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)
@@ -101,6 +101,9 @@ const actions = {
     commit("SET_DIALOG_SHOW_EXPORT", false)
   },
   save({ commit, dispatch }) {
+    if (Array.isArray(state.selected.owner)) {
+      state.selected.owner = state.selected.owner[0]
+    }
     commit("SET_SELECTED_LOADING", true)
     if (!state.selected.id) {
       return TaskApi.create(state.selected)

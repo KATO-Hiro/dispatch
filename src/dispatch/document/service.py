@@ -1,9 +1,12 @@
 from typing import List, Optional
-from datetime import datetime, timedelta
+from pydantic.error_wrappers import ErrorWrapper, ValidationError
+from datetime import datetime
 
 from dispatch.enums import DocumentResourceReferenceTypes
+from dispatch.exceptions import ExistsError
 from dispatch.project import service as project_service
 from dispatch.search_filter import service as search_filter_service
+from dispatch.tag import service as tag_service
 
 from .models import Document, DocumentCreate, DocumentUpdate
 
@@ -46,23 +49,15 @@ def get_conversation_reference_document(*, db_session, project_id: int):
     ).one_or_none()
 
 
-# TODO this could also be done with an sql query if we end up with lots of docs
-def get_overdue_evergreen_documents(*, db_session, project_id) -> List[Optional[Document]]:
-    """Returns all documents that have need had a recent evergreen notification."""
-    documents = (
+def get_overdue_evergreen_documents(*, db_session, project_id: int) -> List[Optional[Document]]:
+    """Returns all documents that have not had a recent evergreen notification."""
+    query = (
         db_session.query(Document)
-        .filter(Document.evergreen == True)  # noqa
         .filter(Document.project_id == project_id)
-    ).all()
-    overdue_documents = []
-    now = datetime.utcnow()
-
-    for d in documents:
-        next_reminder = d.evergreen_last_reminder_at + timedelta(days=d.evergreen_reminder_interval)
-        if now > next_reminder:
-            overdue_documents.append(d)
-
-    return overdue_documents
+        .filter(Document.evergreen == True)  # noqa
+        .filter(Document.overdue == True)  # noqa
+    )
+    return query.all()
 
 
 def get_all(*, db_session) -> List[Optional[Document]]:
@@ -72,23 +67,50 @@ def get_all(*, db_session) -> List[Optional[Document]]:
 
 def create(*, db_session, document_in: DocumentCreate) -> Document:
     """Creates a new document."""
+    # handle the special case of only allowing 1 FAQ document per-project
     project = project_service.get_by_name_or_raise(
         db_session=db_session, project_in=document_in.project
     )
+
+    if document_in.resource_type == DocumentResourceReferenceTypes.faq:
+        faq_doc = (
+            db_session.query(Document)
+            .filter(Document.resource_type == DocumentResourceReferenceTypes.faq)
+            .filter(Document.project_id == project.id)
+            .one_or_none()
+        )
+        if faq_doc:
+            raise ValidationError(
+                [
+                    ErrorWrapper(
+                        ExistsError(
+                            msg="FAQ document already defined for this project.",
+                            document=faq_doc.name,
+                        ),
+                        loc="document",
+                    )
+                ],
+                model=DocumentCreate,
+            )
 
     filters = [
         search_filter_service.get(db_session=db_session, search_filter_id=f.id)
         for f in document_in.filters
     ]
 
+    tags = []
+    for t in document_in.tags:
+        tags.append(tag_service.get_or_create(db_session=db_session, tag_in=t))
+
     # set the last reminder to now
     if document_in.evergreen:
         document_in.evergreen_last_reminder_at = datetime.utcnow()
 
     document = Document(
-        **document_in.dict(exclude={"project", "filters"}),
+        **document_in.dict(exclude={"project", "filters", "tags"}),
         filters=filters,
         project=project,
+        tags=tags,
     )
 
     db_session.add(document)
@@ -119,7 +141,11 @@ def update(*, db_session, document: Document, document_in: DocumentUpdate) -> Do
         if not document.evergreen:
             document_in.evergreen_last_reminder_at = datetime.utcnow()
 
-    update_data = document_in.dict(skip_defaults=True, exclude={"filters"})
+    update_data = document_in.dict(skip_defaults=True, exclude={"filters", "tags"})
+
+    tags = []
+    for t in document_in.tags:
+        tags.append(tag_service.get_or_create(db_session=db_session, tag_in=t))
 
     for field in document_data:
         if field in update_data:
@@ -131,6 +157,8 @@ def update(*, db_session, document: Document, document_in: DocumentUpdate) -> Do
             for f in document_in.filters
         ]
         document.filters = filters
+
+    document.tags = tags
 
     db_session.commit()
     return document

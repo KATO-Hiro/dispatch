@@ -6,15 +6,19 @@ import ServiceApi from "@/service/api"
 
 const getDefaultSelectedState = () => {
   return {
-    name: null,
-    type: null,
-    external_id: null,
-    is_active: null,
-    filters: [],
-    description: null,
-    id: null,
-    project: null,
     created_at: null,
+    description: null,
+    evergreen: null,
+    evergreen_owner: null,
+    evergreen_reminder_interval: null,
+    external_id: null,
+    filters: [],
+    health_metrics: null,
+    id: null,
+    is_active: null,
+    name: null,
+    project: null,
+    type: null,
     updated_at: null,
     loading: false,
   }
@@ -36,7 +40,7 @@ const state = {
     options: {
       q: "",
       page: 1,
-      itemsPerPage: 10,
+      itemsPerPage: 25,
       sortBy: ["name"],
       descending: [true],
       filters: {
@@ -54,7 +58,7 @@ const getters = {
 const actions = {
   getAll: debounce(({ commit, state }) => {
     commit("SET_TABLE_LOADING", "primary")
-    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options })
+    let params = SearchUtils.createParametersFromTableOptions({ ...state.table.options }, "Service")
     return ServiceApi.getAll(params)
       .then((response) => {
         commit("SET_TABLE_LOADING", false)

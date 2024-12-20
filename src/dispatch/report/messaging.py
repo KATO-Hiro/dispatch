@@ -9,6 +9,7 @@ from dispatch.incident.models import Incident
 from dispatch.messaging.strings import (
     INCIDENT_EXECUTIVE_REPORT,
     INCIDENT_REPORT_REMINDER,
+    INCIDENT_REPORT_REMINDER_DELAYED,
     INCIDENT_TACTICAL_REPORT,
     MessageType,
 )
@@ -16,7 +17,6 @@ from dispatch.plugin import service as plugin_service
 
 from .enums import ReportTypes
 from .models import Report
-
 
 log = logging.getLogger(__name__)
 
@@ -83,20 +83,27 @@ def send_tactical_report_to_tactical_group(
         return
 
     notification_text = "Tactical Report"
-    plugin.instance.send(
-        incident.tactical_group.email,
-        notification_text,
-        INCIDENT_TACTICAL_REPORT,
-        MessageType.incident_tactical_report,
-        name=incident.name,
-        title=incident.title,
-        conditions=tactical_report.details.get("conditions"),
-        actions=tactical_report.details.get("actions"),
-        needs=tactical_report.details.get("needs"),
-        contact_fullname=incident.commander.individual.name,
-        contact_team=incident.commander.team,
-        contact_weblink=incident.commander.individual.weblink,
-    )
+
+    # Can raise exception "tenacity.RetryError: RetryError". (Email may still go through).
+    try:
+        plugin.instance.send(
+            incident.tactical_group.email,
+            notification_text,
+            INCIDENT_TACTICAL_REPORT,
+            MessageType.incident_tactical_report,
+            name=incident.name,
+            title=incident.title,
+            conditions=tactical_report.details.get("conditions"),
+            actions=tactical_report.details.get("actions"),
+            needs=tactical_report.details.get("needs"),
+            contact_fullname=incident.commander.individual.name,
+            contact_team=incident.commander.team,
+            contact_weblink=incident.commander.individual.weblink,
+        )
+    except Exception as e:
+        log.error(
+            f"Error in sending {notification_text} email to {incident.tactical_group.email}: {e}"
+        )
 
     log.debug(f"Tactical report sent to tactical group {incident.tactical_group.email}.")
 
@@ -139,12 +146,21 @@ def send_executive_report_to_notifications_group(
 
 
 def send_incident_report_reminder(
-    incident: Incident, report_type: ReportTypes, db_session: SessionLocal
+    incident: Incident, report_type: ReportTypes, db_session: SessionLocal, reminder=False
 ):
     """Sends a direct message to the incident commander indicating that they should complete a report."""
     message_text = f"Incident {report_type} Reminder"
-    message_template = INCIDENT_REPORT_REMINDER
+    message_template = INCIDENT_REPORT_REMINDER_DELAYED if reminder else INCIDENT_REPORT_REMINDER
     command_name, message_type = get_report_reminder_settings(report_type)
+
+    # Null out db attribute if this is a delayed reminder
+    if reminder:
+        if report_type == ReportTypes.tactical_report:
+            incident.delay_tactical_report_reminder = None
+        elif report_type == ReportTypes.executive_report:
+            incident.delay_executive_report_reminder = None
+        db_session.add(incident)
+        db_session.commit()
 
     # check to see if there wasn't a recent report
     now = datetime.utcnow()
@@ -170,6 +186,8 @@ def send_incident_report_reminder(
             "report_type": report_type,
             "ticket_weblink": ticket_weblink,
             "title": incident.title,
+            "incident_id": incident.id,
+            "organization_slug": incident.project.organization.slug,
         }
     ]
 

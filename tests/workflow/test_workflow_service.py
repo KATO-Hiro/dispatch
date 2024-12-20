@@ -1,6 +1,3 @@
-import pytest
-
-
 def test_get(session, workflow):
     from dispatch.workflow.service import get
 
@@ -15,7 +12,7 @@ def test_get_instance(session, workflow_instance):
     assert t_workflow_instance.id == workflow_instance.id
 
 
-def test_create(session, project, plugin_instance):
+def test_create(session, workflow_plugin_instance):
     from dispatch.workflow.service import create
     from dispatch.workflow.models import WorkflowCreate
 
@@ -31,22 +28,21 @@ def test_create(session, project, plugin_instance):
         resource_id=resource_id,
         parameters=parameters,
         enabled=enabled,
-        plugin_instance=plugin_instance,
-        project=project,
+        plugin_instance=workflow_plugin_instance,
+        project=workflow_plugin_instance.project,
     )
     workflow = create(db_session=session, workflow_in=workflow_in)
     assert workflow
 
 
-@pytest.mark.skip  # NOTE: re-enable when using Pydantic models for all parameters in WorkflowInstanceCreate
-def test_create_instance(session, incident, workflow, participant, project):
+def test_create_instance(session, incident, workflow, participant, project, workflow_plugin):
     from dispatch.workflow.service import create_instance
     from dispatch.workflow.models import WorkflowInstanceCreate
     from dispatch.document.models import DocumentCreate
 
     parameters = [{}]
     run_reason = "reason"
-    status = "submitted"
+    status = "Submitted"
 
     artifacts = [
         DocumentCreate(
@@ -58,21 +54,21 @@ def test_create_instance(session, incident, workflow, participant, project):
         )
     ]
 
-    workflow_in = WorkflowInstanceCreate(
+    instance_in = WorkflowInstanceCreate(
         parameters=parameters,
         run_reason=run_reason,
         status=status,
         incident=incident,
-        workflow=workflow,
         creator=participant,
         artifacts=artifacts,
     )
-    workflow_instance = create_instance(db_session=session, workflow_in=workflow_in)
+    workflow_instance = create_instance(
+        db_session=session, workflow=workflow, instance_in=instance_in
+    )
     assert workflow_instance
 
 
-@pytest.mark.skip
-def test_update(session, workflow, plugin_instance):
+def test_update(session, workflow):
     from dispatch.workflow.service import update
     from dispatch.workflow.models import WorkflowUpdate
 
@@ -81,8 +77,8 @@ def test_update(session, workflow, plugin_instance):
 
     workflow_in = WorkflowUpdate(
         name=name,
+        plugin_instance=workflow.plugin_instance,
         resource_id=resource_id,
-        plugin_instance=plugin_instance,
     )
     workflow = update(
         db_session=session,

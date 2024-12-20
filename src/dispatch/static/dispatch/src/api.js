@@ -9,7 +9,7 @@ const instance = axios.create({
 })
 
 const authProviderSlug =
-  process.env.VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_SLUG || "dispatch-auth-provider-basic"
+  import.meta.env.VITE_DISPATCH_AUTHENTICATION_PROVIDER_SLUG || "dispatch-auth-provider-basic"
 
 instance.interceptors.request.use(
   (config) => {
@@ -34,7 +34,7 @@ instance.interceptors.request.use(
 
 instance.interceptors.request.use(function (config) {
   if (!config.url.includes("organization")) {
-    let currentOrganization = store.state.route.params.organization || null
+    let currentOrganization = router.currentRoute.value.params.organization || "default"
 
     if (currentOrganization) {
       config.url = `${currentOrganization}${config.url}`
@@ -52,7 +52,8 @@ instance.interceptors.response.use(
       if (err.response.status == 401) {
         if (authProviderSlug === "dispatch-auth-provider-basic") {
           router.push({ name: "BasicLogin" })
-          store.dispatch("auth/logout")
+        } else {
+          router.go()
         }
       }
 
@@ -63,24 +64,59 @@ instance.interceptors.response.use(
       ) {
         return Promise.reject(err)
       }
+
+      if (err.response.status == 403) {
+        let errorText = err.response.data.detail.map(({ msg }) => msg).join(" ")
+        store.commit(
+          "notification_backend/addBeNotification",
+          {
+            text: errorText,
+            type: "exception",
+          },
+          { root: true }
+        )
+      }
+
+      if (err.response.status == 409) {
+        let errorText = err.response.data.detail.map(({ msg }) => msg).join(" ")
+        store.commit(
+          "notification_backend/addBeNotification",
+          {
+            text: errorText,
+            type: "exception",
+          },
+          { root: true }
+        )
+      }
+
       if (err.response.status == 422) {
         let errorText = err.response.data.detail.map(({ msg }) => msg).join(" ")
         store.commit(
           "notification_backend/addBeNotification",
           {
             text: errorText,
-            type: "error",
+            type: "exception",
           },
           { root: true }
         )
       }
 
       if (err.response.status == 500) {
+        let errorText = ""
+        if (err.response.data.detail) {
+          errorText = err.response.data.detail.map(({ msg }) => msg).join(" ")
+        }
+
+        if (errorText.length == 0) {
+          errorText =
+            "Something has gone wrong. Please, retry or let your admin know that you received this error."
+        }
+
         store.commit(
           "notification_backend/addBeNotification",
           {
-            text: "Something has gone wrong, please retry or let your admin know that you received this error.",
-            type: "error",
+            text: errorText,
+            type: "exception",
           },
           { root: true }
         )

@@ -1,19 +1,23 @@
 import { getField, updateField } from "vuex-map-fields"
 import router from "@/router"
 
-const getDefaulRefreshState = () => {
+const getDefaultRefreshState = () => {
   return {
     show: false,
     message: "",
   }
 }
 
+const latestCommitHash = import.meta.env.VITE_DISPATCH_COMMIT_HASH
+const latestCommitMessage = import.meta.env.VITE_DISPATCH_COMMIT_MESSAGE
+
 const state = {
   toggleDrawer: true,
   refresh: {
-    ...getDefaulRefreshState(),
+    ...getDefaultRefreshState(),
   },
   loading: false,
+  currentVersion: latestCommitHash,
 }
 
 const getters = {
@@ -31,6 +35,16 @@ const actions = {
   setLoading({ commit }, value) {
     commit("SET_LOADING", value)
   },
+  showCommitMessage({ commit }) {
+    commit(
+      "notification_backend/addBeNotification",
+      {
+        text: `Hash: ${latestCommitHash} | Message: ${latestCommitMessage}`,
+        type: "success",
+      },
+      { root: true }
+    )
+  },
 }
 
 const mutations = {
@@ -46,7 +60,7 @@ const mutations = {
     state.loading = value
   },
   RESET_REFRESH(state) {
-    state.refresh = Object.assign(state.refresh, getDefaulRefreshState())
+    state.refresh = Object.assign(state.refresh, getDefaultRefreshState())
   },
 }
 

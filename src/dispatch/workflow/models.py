@@ -18,9 +18,10 @@ from dispatch.models import (
     TimeStampMixin,
     ProjectMixin,
     PrimaryKey,
+    Pagination,
 )
 from dispatch.participant.models import ParticipantRead
-from dispatch.plugin.models import PluginInstance, PluginInstanceRead
+from dispatch.plugin.models import PluginInstance, PluginInstanceReadMinimal
 from dispatch.project.models import ProjectRead
 
 from .enums import WorkflowInstanceStatus
@@ -90,7 +91,8 @@ class WorkflowInstance(Base, ResourceMixin):
     run_reason = Column(String)
     creator_id = Column(Integer, ForeignKey("participant.id"))
     incident_id = Column(Integer, ForeignKey("incident.id", ondelete="CASCADE"))
-
+    case_id = Column(Integer, ForeignKey("case.id", ondelete="CASCADE"))
+    signal_id = Column(Integer, ForeignKey("signal.id", ondelete="CASCADE"))
     creator = relationship(
         "Participant", backref="created_workflow_instances", foreign_keys=[creator_id]
     )
@@ -100,11 +102,26 @@ class WorkflowInstance(Base, ResourceMixin):
     )
 
 
+class WorkflowIncident(DispatchBase):
+    id: PrimaryKey
+    name: Optional[NameStr]
+
+
+class WorkflowCase(DispatchBase):
+    id: PrimaryKey
+    name: Optional[NameStr]
+
+
+class WorkflowSignal(DispatchBase):
+    id: PrimaryKey
+    name: Optional[NameStr]
+
+
 # Pydantic models...
 class WorkflowBase(DispatchBase):
     name: NameStr
     resource_id: str
-    plugin_instance: PluginInstanceRead
+    plugin_instance: PluginInstanceReadMinimal
     parameters: Optional[List[dict]] = []
     enabled: Optional[bool]
     description: Optional[str] = Field(None, nullable=True)
@@ -131,12 +148,7 @@ class WorkflowRead(WorkflowBase):
         return v
 
 
-class WorkflowNested(WorkflowRead):
-    pass
-
-
-class WorkflowPagination(DispatchBase):
-    total: int
+class WorkflowPagination(Pagination):
     items: List[WorkflowRead] = []
 
 
@@ -147,12 +159,16 @@ class WorkflowInstanceBase(ResourceBase):
     run_reason: Optional[str] = Field(None, nullable=True)
     status: Optional[WorkflowInstanceStatus]
     updated_at: Optional[datetime] = None
+    incident: Optional[WorkflowIncident]
+    case: Optional[WorkflowCase]
+    signal: Optional[WorkflowSignal]
 
 
 class WorkflowInstanceCreate(WorkflowInstanceBase):
-    creator: dict  # TODO define a required email
-    incident: dict  # TODO define a required ID
-    workflow: dict  # TODO define a required ID
+    creator: Optional[ParticipantRead]
+    incident: Optional[WorkflowIncident]
+    case: Optional[WorkflowCase]
+    signal: Optional[WorkflowSignal]
 
 
 class WorkflowInstanceUpdate(WorkflowInstanceBase):
@@ -162,9 +178,8 @@ class WorkflowInstanceUpdate(WorkflowInstanceBase):
 class WorkflowInstanceRead(WorkflowInstanceBase):
     id: PrimaryKey
     workflow: WorkflowRead
-    creator: ParticipantRead
+    creator: Optional[ParticipantRead]
 
 
-class WorkflowInstancePagination(DispatchBase):
-    total: int
+class WorkflowInstancePagination(Pagination):
     items: List[WorkflowInstanceRead] = []

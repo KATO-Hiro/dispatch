@@ -1,180 +1,176 @@
 <template>
-  <v-layout wrap>
-    <new-edit-sheet />
-    <delete-dialog />
-    <div class="headline">Tasks</div>
-    <v-spacer />
-    <table-filter-dialog />
-    <table-export-dialog />
-    <v-btn color="info" class="ml-2" @click="createEditShow()"> New </v-btn>
-    <v-flex xs12>
-      <v-layout column>
-        <v-flex>
-          <v-card elevation="0">
-            <v-card-title>
-              <v-text-field
-                v-model="q"
-                append-icon="search"
-                label="Search"
-                single-line
-                hide-details
-                clearable
+  <v-container fluid>
+    <v-row no-gutters>
+      <new-edit-sheet />
+      <delete-dialog />
+      <v-col>
+        <div class="text-h5">Tasks</div>
+      </v-col>
+      <v-spacer />
+      <v-col class="text-right">
+        <table-filter-dialog :projects="defaultUserProjects" />
+        <table-export-dialog />
+        <v-btn color="info" class="ml-2" @click="createEditShow()"> New </v-btn>
+      </v-col>
+    </v-row>
+    <v-row no-gutters>
+      <v-col>
+        <v-card variant="flat">
+          <v-card-title>
+            <v-text-field
+              v-model="q"
+              append-inner-icon="mdi-magnify"
+              label="Search"
+              single-line
+              hide-details
+              clearable
+            />
+          </v-card-title>
+          <v-data-table-server
+            :headers="headers"
+            :items="items"
+            :items-length="total || 0"
+            v-model:page="page"
+            v-model:items-per-page="itemsPerPage"
+            v-model:sort-by="sortBy"
+            v-model:sort-desc="descending"
+            v-model="selected"
+            :loading="loading"
+            loading-text="Loading... Please wait"
+            show-select
+            return-object
+          >
+            <template #item.description="{ item }">
+              <div class="text-truncate" style="max-width: 400px">
+                {{ item.description }}
+              </div>
+            </template>
+            <template #item.project.display_name="{ item }">
+              <v-chip size="small" :color="item.project.color">
+                {{ item.project.display_name }}
+              </v-chip>
+            </template>
+            <template #item.incident_priority.name="{ item }">
+              <incident-priority :priority="item.incident.incident_priority.name" />
+            </template>
+            <template #item.creator.individual_contact.name="{ item }">
+              <participant :participant="item.creator" />
+            </template>
+            <template #item.owner.individual_contact.name="{ item }">
+              <participant :participant="item.owner" />
+            </template>
+            <template #item.incident_type.name="{ item }">
+              {{ item.incident.incident_type.name }}
+            </template>
+            <template #item.assignees="{ item }">
+              <participant
+                v-for="assignee in item.assignees"
+                :key="assignee.id"
+                :participant="assignee"
               />
-            </v-card-title>
-            <v-data-table
-              :headers="headers"
-              :items="items"
-              :server-items-length="total"
-              :page.sync="page"
-              :items-per-page.sync="itemsPerPage"
-              :sort-by.sync="sortBy"
-              :sort-desc.sync="descending"
-              v-model="selected"
-              :loading="loading"
-              loading-text="Loading... Please wait"
-              show-select
-            >
-              <template v-slot:item.description="{ item }">
-                <div class="text-truncate" style="max-width: 400px">
-                  {{ item.description }}
-                </div>
-              </template>
-              <template v-slot:item.project.name="{ item }">
-                <v-chip small :color="item.project.color" text-color="white">
-                  {{ item.project.name }}
-                </v-chip>
-              </template>
-              <template v-slot:item.incident_priority.name="{ item }">
-                <incident-priority :priority="item.incident.incident_priority.name" />
-              </template>
-              <template v-slot:item.creator.individual_contact.name="{ item }">
-                <participant :participant="item.creator" />
-              </template>
-              <template v-slot:item.owner.individual_contact.name="{ item }">
-                <participant :participant="item.owner" />
-              </template>
-              <template v-slot:item.incident_type.name="{ item }">
-                {{ item.incident.incident_type.name }}
-              </template>
-              <template v-slot:item.tickets="{ item }">
-                <a
-                  v-for="ticket in item.tickets"
-                  :key="ticket.weblink"
-                  :href="ticket.weblink"
-                  target="_blank"
-                  style="text-decoration: none"
-                >
-                  Ticket
-                  <v-icon small>open_in_new</v-icon>
-                </a>
-              </template>
-              <template v-slot:item.assignees="{ item }">
-                <participant
-                  v-for="assignee in item.assignees"
-                  :key="assignee.id"
-                  :participant="assignee"
-                />
-              </template>
-              <template v-slot:item.resolve_by="{ item }">
-                <v-tooltip bottom>
-                  <template v-slot:activator="{ on, attrs }">
-                    <span v-bind="attrs" v-on="on">{{ item.resolve_by | formatRelativeDate }}</span>
-                  </template>
-                  <span>{{ item.resolve_by | formatDate }}</span>
-                </v-tooltip>
-              </template>
-              <template v-slot:item.created_at="{ item }">
-                <v-tooltip bottom>
-                  <template v-slot:activator="{ on, attrs }">
-                    <span v-bind="attrs" v-on="on">{{ item.created_at | formatRelativeDate }}</span>
-                  </template>
-                  <span>{{ item.created_at | formatDate }}</span>
-                </v-tooltip>
-              </template>
-              <template v-slot:item.resolved_at="{ item }">
-                <v-tooltip bottom>
-                  <template v-slot:activator="{ on, attrs }">
-                    <span v-bind="attrs" v-on="on">{{
-                      item.resolved_at | formatRelativeDate
-                    }}</span>
-                  </template>
-                  <span>{{ item.resolved_at | formatDate }}</span>
-                </v-tooltip>
-              </template>
-              <template v-slot:item.source="{ item }">
-                <a :href="item.weblink" target="_blank" style="text-decoration: none">
-                  {{ item.source }}
-                  <v-icon small>open_in_new</v-icon>
-                </a>
-              </template>
-              <template v-slot:item.data-table-actions="{ item }">
-                <v-menu bottom left>
-                  <template v-slot:activator="{ on }">
-                    <v-btn icon v-on="on">
-                      <v-icon>mdi-dots-vertical</v-icon>
-                    </v-btn>
-                  </template>
-                  <v-list>
-                    <v-list-item @click="createEditShow(item)">
-                      <v-list-item-title>View / Edit</v-list-item-title>
-                    </v-list-item>
-                  </v-list>
-                </v-menu>
-              </template>
-            </v-data-table>
-          </v-card>
-        </v-flex>
-      </v-layout>
-    </v-flex>
+            </template>
+            <template #item.resolve_by="{ item }">
+              <v-tooltip location="bottom">
+                <template #activator="{ props }">
+                  <span v-bind="props">{{ formatRelativeDate(item.resolve_by) }}</span>
+                </template>
+                <span>{{ formatDate(item.resolve_by) }}</span>
+              </v-tooltip>
+            </template>
+            <template #item.created_at="{ item }">
+              <v-tooltip location="bottom">
+                <template #activator="{ props }">
+                  <span v-bind="props">{{ formatRelativeDate(item.created_at) }}</span>
+                </template>
+                <span>{{ formatDate(item.created_at) }}</span>
+              </v-tooltip>
+            </template>
+            <template #item.resolved_at="{ item }">
+              <v-tooltip location="bottom">
+                <template #activator="{ props }">
+                  <span v-bind="props">{{ formatRelativeDate(item.resolved_at) }}</span>
+                </template>
+                <span>{{ formatDate(item.resolved_at) }}</span>
+              </v-tooltip>
+            </template>
+            <template #item.source="{ item }">
+              <a :href="item.weblink" target="_blank" style="text-decoration: none">
+                {{ item.source }}
+                <v-icon size="small">mdi-open-in-new</v-icon>
+              </a>
+            </template>
+            <template #item.data-table-actions="{ item }">
+              <v-menu location="right" origin="overlap">
+                <template #activator="{ props }">
+                  <v-btn icon variant="text" v-bind="props">
+                    <v-icon>mdi-dots-vertical</v-icon>
+                  </v-btn>
+                </template>
+                <v-list>
+                  <v-list-item @click="createEditShow(item)">
+                    <v-list-item-title>View / Edit</v-list-item-title>
+                  </v-list-item>
+                </v-list>
+              </v-menu>
+            </template>
+          </v-data-table-server>
+        </v-card>
+      </v-col>
+    </v-row>
     <bulk-edit-sheet />
-  </v-layout>
+  </v-container>
 </template>
 
 <script>
 import { mapFields } from "vuex-map-fields"
 import { mapActions } from "vuex"
+import { formatRelativeDate, formatDate } from "@/filters"
 
-import RouterUtils from "@/router/utils"
-import DeleteDialog from "@/task/DeleteDialog.vue"
-import NewEditSheet from "@/task/NewEditSheet.vue"
-import TableFilterDialog from "@/task/TableFilterDialog.vue"
 import BulkEditSheet from "@/task/BulkEditSheet.vue"
-import IncidentPriority from "@/incident/IncidentPriority.vue"
+import DeleteDialog from "@/task/DeleteDialog.vue"
+import IncidentPriority from "@/incident/priority/IncidentPriority.vue"
+import NewEditSheet from "@/task/NewEditSheet.vue"
 import Participant from "@/incident/Participant.vue"
+import RouterUtils from "@/router/utils"
 import TableExportDialog from "@/task/TableExportDialog.vue"
+import TableFilterDialog from "@/task/TableFilterDialog.vue"
 
 export default {
   name: "TaskTable",
 
   components: {
-    TableFilterDialog,
-    DeleteDialog,
-    NewEditSheet,
     BulkEditSheet,
+    DeleteDialog,
     IncidentPriority,
+    NewEditSheet,
     Participant,
     TableExportDialog,
+    TableFilterDialog,
   },
+
   data() {
     return {
       headers: [
-        { text: "Incident Name", value: "incident.name", sortable: true },
-        { text: "Incident Priority", value: "incident_priority.name", sortable: true },
-        { text: "Incident Type", value: "incident_type.name", sortable: true },
-        { text: "Status", value: "status", sortable: true },
-        { text: "Creator", value: "creator.individual_contact.name", sortable: true },
-        { text: "Owner", value: "owner.individual_contact.name", sortable: true },
-        { text: "Assignees", value: "assignees", sortable: false },
-        { text: "Description", value: "description", sortable: false },
-        { text: "Source", value: "source", sortable: true },
-        { text: "Tickets", value: "tickets", sortable: false },
-        { text: "Project", value: "project.name", sortable: true },
-        { text: "Due By", value: "resolve_by", sortable: true },
-        { text: "Created At", value: "created_at", sortable: true },
-        { text: "Resolved At", value: "resolved_at", sortable: true },
-        { text: "", value: "data-table-actions", sortable: false, align: "end" },
+        { title: "Incident Name", value: "incident.name", sortable: true },
+        { title: "Incident Priority", value: "incident_priority.name", sortable: true },
+        { title: "Incident Type", value: "incident_type.name", sortable: true },
+        { title: "Status", value: "status", sortable: true },
+        { title: "Creator", value: "creator.individual_contact.name", sortable: false },
+        { title: "Owner", value: "owner.individual_contact.name", sortable: false },
+        { title: "Assignee", value: "assignees", sortable: false },
+        { title: "Description", value: "description", sortable: false },
+        { title: "Source", value: "source", sortable: true },
+        { title: "Project", value: "project.display_name", sortable: false },
+        { title: "Due By", value: "resolve_by", sortable: true },
+        { title: "Created At", value: "created_at", sortable: true },
+        { title: "Resolved At", value: "resolved_at", sortable: true },
+        { title: "", key: "data-table-actions", sortable: false, align: "end" },
       ],
     }
+  },
+
+  setup() {
+    return { formatRelativeDate, formatDate }
   },
 
   computed: {
@@ -198,11 +194,30 @@ export default {
       "table.rows.total",
       "table.rows.selected",
     ]),
-    ...mapFields("route", ["query"]),
+    ...mapFields("auth", ["currentUser.projects"]),
+
+    defaultUserProjects: {
+      get() {
+        let d = null
+        if (this.projects) {
+          let d = this.projects.filter((v) => v.default === true)
+          return d.map((v) => v.project)
+        }
+        return d
+      },
+    },
+  },
+
+  methods: {
+    ...mapActions("task", ["getAll", "createEditShow", "removeShow"]),
   },
 
   created() {
-    this.filters = { ...this.filters, ...RouterUtils.deserializeFilters(this.query) }
+    this.filters = {
+      ...this.filters,
+      ...RouterUtils.deserializeFilters(this.$route.query),
+      project: this.defaultUserProjects,
+    }
 
     this.getAll()
 
@@ -219,14 +234,11 @@ export default {
         vm.itemsPerPage,
         vm.sortBy,
         vm.descending,
-        vm.creator,
-        vm.assignee,
+        vm.project,
         vm.incident,
         vm.incident_type,
         vm.incident_priority,
-        vm.project,
         vm.status,
-        vm.project,
       ],
       () => {
         this.page = 1
@@ -234,10 +246,6 @@ export default {
         this.getAll()
       }
     )
-  },
-
-  methods: {
-    ...mapActions("task", ["getAll", "createEditShow", "removeShow"]),
   },
 }
 </script>

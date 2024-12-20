@@ -3,11 +3,18 @@ import os
 import base64
 from urllib import parse
 from typing import List
+from pydantic import BaseModel
 
 from starlette.config import Config
 from starlette.datastructures import CommaSeparatedStrings
 
 log = logging.getLogger(__name__)
+
+
+class BaseConfigurationModel(BaseModel):
+    """Base configuration model used by all config options."""
+
+    pass
 
 
 def get_env_tags(tag_list: List[str]) -> dict:
@@ -51,7 +58,6 @@ if SECRET_PROVIDER == "metatron-secret":
         def __str__(self) -> str:
             return self._decrypted_value
 
-
 elif SECRET_PROVIDER == "kms-secret":
     import boto3
 
@@ -76,7 +82,6 @@ elif SECRET_PROVIDER == "kms-secret":
         def __str__(self) -> str:
             return self._decrypted_value
 
-
 else:
     from starlette.datastructures import Secret
 
@@ -87,10 +92,16 @@ ENV = config("ENV", default="local")
 ENV_TAG_LIST = config("ENV_TAGS", cast=CommaSeparatedStrings, default="")
 ENV_TAGS = get_env_tags(ENV_TAG_LIST)
 
-DISPATCH_UI_URL = config("DISPATCH_UI_URL", default="http://localhost:8000 ")
-DISPATCH_HELP_EMAIL = config("DISPATCH_HELP_EMAIL", default="help@example.com")
+DISPATCH_UI_URL = config("DISPATCH_UI_URL", default="http://localhost:8080")
+DISPATCH_ENCRYPTION_KEY = config("DISPATCH_ENCRYPTION_KEY", cast=Secret)
 
 # authentication
+VITE_DISPATCH_AUTH_REGISTRATION_ENABLED = config(
+    "VITE_DISPATCH_AUTH_REGISTRATION_ENABLED", default="true"
+)
+DISPATCH_AUTH_REGISTRATION_ENABLED = VITE_DISPATCH_AUTH_REGISTRATION_ENABLED != "false"
+
+
 DISPATCH_AUTHENTICATION_PROVIDER_SLUG = config(
     "DISPATCH_AUTHENTICATION_PROVIDER_SLUG", default="dispatch-auth-provider-basic"
 )
@@ -99,6 +110,17 @@ MJML_PATH = config(
     "MJML_PATH",
     default=f"{os.path.dirname(os.path.realpath(__file__))}/static/dispatch/node_modules/.bin",
 )
+DISPATCH_MARKDOWN_IN_INCIDENT_DESC = config(
+    "DISPATCH_MARKDOWN_IN_INCIDENT_DESC", cast=bool, default=False
+)
+DISPATCH_ESCAPE_HTML = config("DISPATCH_ESCAPE_HTML", cast=bool, default=None)
+if DISPATCH_ESCAPE_HTML and DISPATCH_MARKDOWN_IN_INCIDENT_DESC:
+    log.warning(
+        "HTML escape and Markdown are both explicitly enabled, this may cause unexpected notification markup."
+    )
+elif DISPATCH_ESCAPE_HTML is None and DISPATCH_MARKDOWN_IN_INCIDENT_DESC:
+    log.info("Disabling HTML escaping, due to Markdown was enabled explicitly.")
+    DISPATCH_ESCAPE_HTML = False
 
 DISPATCH_JWT_AUDIENCE = config("DISPATCH_JWT_AUDIENCE", default=None)
 DISPATCH_JWT_EMAIL_OVERRIDE = config("DISPATCH_JWT_EMAIL_OVERRIDE", default=None)
@@ -133,27 +155,48 @@ if DISPATCH_AUTHENTICATION_PROVIDER_SLUG == "dispatch-auth-provider-pkce":
             "No PKCE JWKS url provided, this is required if you are using PKCE authentication."
         )
 
+DISPATCH_AUTHENTICATION_PROVIDER_HEADER_NAME = config(
+    "DISPATCH_AUTHENTICATION_PROVIDER_HEADER_NAME", default="remote-user"
+)
+
+DISPATCH_AUTHENTICATION_PROVIDER_AWS_ALB_ARN = config(
+    "DISPATCH_AUTHENTICATION_PROVIDER_AWS_ALB_ARN", default=None
+)
+DISPATCH_AUTHENTICATION_PROVIDER_AWS_ALB_EMAIL_CLAIM = config(
+    "DISPATCH_AUTHENTICATION_PROVIDER_AWS_ALB_EMAIL_CLAIM", default="email"
+)
+DISPATCH_AUTHENTICATION_PROVIDER_AWS_ALB_PUBLIC_KEY_CACHE_SECONDS = config(
+    "DISPATCH_AUTHENTICATION_PROVIDER_AWS_ALB_PUBLIC_KEY_CACHE_SECONDS", cast=int, default=300
+)
+
 # sentry middleware
+SENTRY_ENABLED = config("SENTRY_ENABLED", default="")
 SENTRY_DSN = config("SENTRY_DSN", default="")
+SENTRY_APP_KEY = config("SENTRY_APP_KEY", default="")
+SENTRY_TAGS = config("SENTRY_TAGS", default="")
 
-VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_SLUG = DISPATCH_AUTHENTICATION_PROVIDER_SLUG
-VUE_APP_SENTRY_ENABLED = config("VUE_APP_SENTRY_ENABLED", default="")
-VUE_APP_SENTRY_DSN = SENTRY_DSN
-VUE_APP_SENTRY_APP_KEY = config("VUE_APP_SENTRY_APP_KEY", default="")
+# Frontend configuration
+VITE_DISPATCH_AUTHENTICATION_PROVIDER_SLUG = DISPATCH_AUTHENTICATION_PROVIDER_SLUG
 
-VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL = config(
-    "VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL", default=""
+VITE_SENTRY_ENABLED = SENTRY_ENABLED
+VITE_SENTRY_DSN = SENTRY_DSN
+VITE_SENTRY_APP_KEY = SENTRY_APP_KEY
+VITE_SENTRY_TAGS = SENTRY_TAGS
+
+# used by pkce authprovider
+VITE_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL = config(
+    "VITE_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL", default=""
 )
-VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID = config(
-    "VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID", default=""
+VITE_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID = config(
+    "DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID", default=""
 )
-VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN = config(
-    "VUE_APP_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN", default=""
+VITE_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN = config(
+    "DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN", default=""
 )
 
 # static files
 DEFAULT_STATIC_DIR = os.path.join(
-    os.path.abspath(os.path.dirname(__file__)), "static/dispatch/dist"
+    os.path.abspath(os.path.dirname(__file__)), os.path.join("static", "dispatch", "dist")
 )
 STATIC_DIR = config("STATIC_DIR", default=DEFAULT_STATIC_DIR)
 
@@ -168,6 +211,11 @@ _DATABASE_CREDENTIAL_USER, _DATABASE_CREDENTIAL_PASSWORD = str(DATABASE_CREDENTI
 _QUOTED_DATABASE_PASSWORD = parse.quote(str(_DATABASE_CREDENTIAL_PASSWORD))
 DATABASE_NAME = config("DATABASE_NAME", default="dispatch")
 DATABASE_PORT = config("DATABASE_PORT", default="5432")
+DATABASE_ENGINE_POOL_SIZE = config("DATABASE_ENGINE_POOL_SIZE", cast=int, default=20)
+DATABASE_ENGINE_MAX_OVERFLOW = config("DATABASE_ENGINE_MAX_OVERFLOW", cast=int, default=0)
+# Deal with DB disconnects
+# https://docs.sqlalchemy.org/en/20/core/pooling.html#pool-disconnects
+DATABASE_ENGINE_POOL_PING = config("DATABASE_ENGINE_POOL_PING", default=False)
 SQLALCHEMY_DATABASE_URI = f"postgresql+psycopg2://{_DATABASE_CREDENTIAL_USER}:{_QUOTED_DATABASE_PASSWORD}@{DATABASE_HOSTNAME}:{DATABASE_PORT}/{DATABASE_NAME}"
 
 ALEMBIC_CORE_REVISION_PATH = config(
@@ -186,35 +234,3 @@ ALEMBIC_MULTI_TENANT_MIGRATION_PATH = config(
     "ALEMBIC_MULTI_TENANT_MIGRATION_PATH",
     default=f"{os.path.dirname(os.path.realpath(__file__))}/database/revisions/multi-tenant-migration.sql",
 )
-
-# incident resources
-INCIDENT_STORAGE_FOLDER_ID = config("INCIDENT_STORAGE_FOLDER_ID", default=None)
-
-INCIDENT_STORAGE_OPEN_ON_CLOSE = config("INCIDENT_STORAGE_OPEN_ON_CLOSE", default=True)
-
-INCIDENT_RESPONSE_TEAM_EMAIL = config("INCIDENT_RESPONSE_TEAM_EMAIL", default="")
-
-INCIDENT_ONCALL_SERVICE_ID = config("INCIDENT_ONCALL_SERVICE_ID", default=None)
-if not INCIDENT_ONCALL_SERVICE_ID:
-    INCIDENT_DAILY_SUMMARY_ONCALL_SERVICE_ID = config(
-        "INCIDENT_DAILY_SUMMARY_ONCALL_SERVICE_ID", default=None
-    )
-    if INCIDENT_DAILY_SUMMARY_ONCALL_SERVICE_ID:
-        log.warn(
-            "INCIDENT_DAILY_SUMMARY_ONCALL_SERVICE_ID has been deprecated. Please use INCIDENT_ONCALL_SERVICE_ID instead."
-        )
-        INCIDENT_ONCALL_SERVICE_ID = INCIDENT_DAILY_SUMMARY_ONCALL_SERVICE_ID
-
-INCIDENT_RESOURCE_TACTICAL_GROUP = config(
-    "INCIDENT_RESOURCE_TACTICAL_GROUP", default="google-group-participant-tactical-group"
-)
-INCIDENT_RESOURCE_NOTIFICATIONS_GROUP = config(
-    "INCIDENT_RESOURCE_NOTIFICATIONS_GROUP", default="google-group-participant-notifications-group"
-)
-INCIDENT_RESOURCE_INCIDENT_TASK = config(
-    "INCIDENT_RESOURCE_INCIDENT_TASK", default="google-docs-incident-task"
-)
-
-# Incident Cost Configuration
-ANNUAL_COST_EMPLOYEE = config("ANNUAL_COST_EMPLOYEE", cast=int, default="650000")
-BUSINESS_HOURS_YEAR = config("BUSINESS_HOURS_YEAR", cast=int, default="2080")

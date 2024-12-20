@@ -6,6 +6,7 @@
 .. moduleauthor:: Kevin Glisson <kglisson@netflix.com>
 .. moduleauthor:: Marc Vilanova <mvilanova@netflix.com>
 """
+
 import re
 import logging
 from typing import Any, List
@@ -14,7 +15,6 @@ from dispatch.task.enums import TaskStatus
 from enum import Enum
 
 from .drive import get_activity, get_comment, get_person
-from dispatch.plugins.dispatch_google.config import GOOGLE_USER_OVERRIDE
 
 log = logging.getLogger(__name__)
 
@@ -66,14 +66,14 @@ def get_tickets(replies: List[dict]):
 
 def get_user_email(client: Any, person_id: str) -> str:
     """Resolves the email address for the actor of the activity."""
-    # fetch the email from the people api
-    person_data = get_person(client, person_id)
+    try:
+        # fetch the email from the people api
+        person_data = get_person(client, person_id)
+        email_address = person_data["emailAddresses"][0]["value"]
+    except KeyError:
+        return "unknown@example.com"
 
-    # this is required due to issues with cross domain lookups (mainly used for testing)
-    if GOOGLE_USER_OVERRIDE:
-        return GOOGLE_USER_OVERRIDE
-
-    return person_data["emailAddresses"][0]["value"]
+    return email_address
 
 
 def get_task_activity(
@@ -91,21 +91,21 @@ def get_task_activity(
 
             task = {"resource_id": discussion_id}
 
+            # we assume the person doing the assignment to be the creator of the task
+            creator_person_id = a["actors"][0]["user"]["knownUser"]["personName"]
+            task["creator"] = {
+                "individual": {"email": get_user_email(people_client, creator_person_id)}
+            }
+
             # we create a new task when comment has an assignment added to it
             if subtype == AssignmentSubTypes.added:
                 # we need to fetch the comment data
                 discussion_id = a["targets"][0]["fileComment"]["legacyDiscussionId"]
                 comment = get_comment(comment_client, file_id, discussion_id)
 
-                task["description"] = comment["content"]
+                task["description"] = comment.get("quotedFileContent", {}).get("value", "")
 
                 task["tickets"] = get_tickets(comment["replies"])
-
-                # we assume the person doing the assignment to be the creator of the task
-                creator_person_id = a["actors"][0]["user"]["knownUser"]["personName"]
-                task["creator"] = {
-                    "individual": {"email": get_user_email(people_client, creator_person_id)}
-                }
 
                 # we only associate the current assignee event if multiple of people are mentioned (NOTE: should we also associated other mentions?)
                 assignee_person_id = a["primaryActionDetail"]["comment"][CommentTypes.assignment][
@@ -115,7 +115,7 @@ def get_task_activity(
                     {"individual": {"email": get_user_email(people_client, assignee_person_id)}}
                 ]
 
-                # this is when the user was assigned (making it into a task, not when the inital comment was created)
+                # this is when the user was assigned (making it into a task, not when the initial comment was created)
                 task["created_at"] = a["timestamp"]
 
                 # this is the deep link to the associated comment

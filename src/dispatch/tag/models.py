@@ -7,7 +7,7 @@ from sqlalchemy.sql.schema import UniqueConstraint
 from sqlalchemy_utils import TSVectorType
 
 from dispatch.database.core import Base
-from dispatch.models import DispatchBase, TimeStampMixin, ProjectMixin, PrimaryKey
+from dispatch.models import DispatchBase, TimeStampMixin, ProjectMixin, PrimaryKey, Pagination
 from dispatch.project.models import ProjectRead
 from dispatch.tag_type.models import TagTypeRead, TagTypeCreate, TagTypeUpdate
 
@@ -21,13 +21,17 @@ class Tag(Base, TimeStampMixin, ProjectMixin):
     description = Column(String)
     uri = Column(String)
     source = Column(String)
+    external_id = Column(String)
     discoverable = Column(Boolean, default=True)
 
     # Relationships
     tag_type_id = Column(Integer, ForeignKey("tag_type.id"), nullable=False)
     tag_type = relationship("TagType", backref="tag")
 
-    search_vector = Column(TSVectorType("name"))
+    # the catalog here is simple to help matching "named entities"
+    search_vector = Column(
+        TSVectorType("name", "description", "external_id", regconfig="pg_catalog.simple")
+    )
 
 
 # Pydantic models
@@ -36,6 +40,7 @@ class TagBase(DispatchBase):
     source: Optional[str] = Field(None, nullable=True)
     uri: Optional[str] = Field(None, nullable=True)
     discoverable: Optional[bool] = True
+    external_id: Optional[str] = Field(None, nullable=True)
     description: Optional[str] = Field(None, nullable=True)
 
 
@@ -56,6 +61,5 @@ class TagRead(TagBase):
     project: ProjectRead
 
 
-class TagPagination(DispatchBase):
+class TagPagination(Pagination):
     items: List[TagRead]
-    total: int

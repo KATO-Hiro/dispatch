@@ -10,7 +10,7 @@ from sqlalchemy_utils import TSVectorType
 
 
 from dispatch.database.core import Base
-from dispatch.models import DispatchBase, NameStr, OrganizationSlug, PrimaryKey
+from dispatch.models import DispatchBase, NameStr, OrganizationSlug, PrimaryKey, Pagination
 
 
 class Organization(Base):
@@ -31,7 +31,7 @@ class Organization(Base):
 
 
 def generate_slug(target, value, oldvalue, initiator):
-    """Creates a resonable slug based on organization name."""
+    """Creates a reasonable slug based on organization name."""
     if value and (not target.slug or value != oldvalue):
         target.slug = slugify(value, separator="_")
 
@@ -53,8 +53,13 @@ class OrganizationCreate(OrganizationBase):
     pass
 
 
-class OrganizationUpdate(OrganizationBase):
-    pass
+class OrganizationUpdate(DispatchBase):
+    id: Optional[PrimaryKey]
+    description: Optional[str] = Field(None, nullable=True)
+    default: Optional[bool] = Field(False, nullable=True)
+    banner_enabled: Optional[bool] = Field(False, nullable=True)
+    banner_color: Optional[Color] = Field(None, nullable=True)
+    banner_text: Optional[NameStr] = Field(None, nullable=True)
 
 
 class OrganizationRead(OrganizationBase):
@@ -62,6 +67,5 @@ class OrganizationRead(OrganizationBase):
     slug: Optional[OrganizationSlug]
 
 
-class OrganizationPagination(DispatchBase):
-    total: int
+class OrganizationPagination(Pagination):
     items: List[OrganizationRead] = []

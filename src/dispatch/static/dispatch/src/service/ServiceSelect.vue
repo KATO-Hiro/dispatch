@@ -1,45 +1,44 @@
 <template>
-  <ValidationProvider name="service" immediate>
-    <v-combobox
-      v-model="service"
-      :items="items"
-      :search-input.sync="search"
-      :menu-props="{ maxHeight: '400' }"
-      item-text="name"
-      :label="label"
-      placeholder="Start typing to search"
-      return-object
-      :hint="hint"
-      :loading="loading"
-      no-filter
-    >
-      <template slot="append-outer">
-        <v-btn icon @click="createEditShow({})">
-          <v-icon>add</v-icon>
-        </v-btn>
-        <new-edit-sheet @new-service-created="addItem($event)" />
-      </template>
-    </v-combobox>
-  </ValidationProvider>
+  <v-combobox
+    v-model="service"
+    :items="items"
+    v-model:search="search"
+    :menu-props="{ maxHeight: '400' }"
+    item-title="name"
+    item-value="id"
+    :label="label"
+    placeholder="Start typing to search"
+    return-object
+    :hint="hint"
+    :loading="loading"
+    no-filter
+    clearable
+    chips
+    multiple
+    closable-chips
+  >
+    <template #append-item>
+      <v-list-item v-if="more" @click="loadMore">
+        <v-list-item-subtitle>Load More</v-list-item-subtitle>
+      </v-list-item>
+    </template>
+  </v-combobox>
 </template>
 
 <script>
-import { mapActions } from "vuex"
 import { cloneDeep } from "lodash"
-import { ValidationProvider } from "vee-validate"
-
+import { debounce } from "lodash"
 import SearchUtils from "@/search/utils"
 import ServiceApi from "@/service/api"
-import NewEditSheet from "@/service/NewEditSheet.vue"
 
 export default {
   name: "ServiceSelect",
 
   props: {
-    value: {
+    modelValue: {
       type: Object,
       default: function () {
-        return {}
+        return null
       },
     },
     label: {
@@ -55,14 +54,13 @@ export default {
       },
     },
     project: {
-      type: [Object],
+      type: Object,
       default: null,
     },
-  },
-
-  components: {
-    ValidationProvider,
-    NewEditSheet,
+    healthMetrics: {
+      type: Boolean,
+      default: false,
+    },
   },
 
   data() {
@@ -71,6 +69,9 @@ export default {
       search: null,
       select: null,
       items: [],
+      more: false,
+      numItems: 5,
+      total: 0,
     }
   },
 
@@ -87,44 +88,47 @@ export default {
   computed: {
     service: {
       get() {
-        return cloneDeep(this.value)
+        return cloneDeep(this.modelValue)
       },
       set(value) {
-        this.$emit("input", value)
+        this.$emit("update:modelValue", value)
       },
     },
   },
 
   methods: {
-    ...mapActions("service", ["createEditShow"]),
-    addItem(v) {
-      this.service = v
-      this.items.push(v)
+    loadMore() {
+      this.numItems += 5
+      this.fetchData()
     },
-    fetchData() {
+    fetchData: debounce(function () {
       this.error = null
       this.loading = "error"
       let filterOptions = {
         q: this.search,
         sortBy: ["name"],
         descending: [false],
+        itemsPerPage: this.numItems,
+        filters: { is_active: ["true"] },
       }
 
       if (this.project) {
-        filterOptions = {
-          ...filterOptions,
-          filters: {
-            project: [this.project],
-          },
-        }
-        filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions })
+        filterOptions.filters.project_id = this.project.id
       }
+
+      if (this.healthMetrics) {
+        filterOptions.filters.health_metrics = ["true"]
+      }
+
+      filterOptions = SearchUtils.createParametersFromTableOptions({ ...filterOptions }, "Service")
 
       ServiceApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
+        this.total = response.data.total
+        this.more = this.items.length < this.total
         this.loading = false
       })
-    },
+    }, 300),
   },
   created() {
     this.fetchData()

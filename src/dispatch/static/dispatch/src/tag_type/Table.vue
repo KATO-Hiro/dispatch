@@ -1,59 +1,66 @@
 <template>
-  <v-layout wrap>
+  <v-container fluid>
     <new-edit-sheet />
-    <v-row align="center" justify="space-between">
-      <v-col class="grow">
+    <v-row align="center" justify="space-between" no-gutters>
+      <v-col cols="8">
         <settings-breadcrumbs v-model="project" />
       </v-col>
-      <v-col class="shrink">
+      <v-col class="text-right">
         <v-btn color="info" class="mr-2" @click="createEditShow()"> New </v-btn>
       </v-col>
     </v-row>
-    <v-flex xs12>
-      <v-layout column>
-        <v-flex>
-          <v-card elevation="0">
-            <v-card-title>
-              <v-text-field
-                v-model="q"
-                append-icon="search"
-                label="Search"
-                single-line
-                hide-details
-                clearable
-              />
-            </v-card-title>
-            <v-data-table
-              :headers="headers"
-              :items="items"
-              :server-items-length="total"
-              :page.sync="page"
-              :items-per-page.sync="itemsPerPage"
-              :sort-by.sync="sortBy"
-              :sort-desc.sync="descending"
-              :loading="loading"
-              loading-text="Loading... Please wait"
-            >
-              <template v-slot:item.data-table-actions="{ item }">
-                <v-menu bottom left>
-                  <template v-slot:activator="{ on }">
-                    <v-btn icon v-on="on">
-                      <v-icon>mdi-dots-vertical</v-icon>
-                    </v-btn>
-                  </template>
-                  <v-list>
-                    <v-list-item @click="createEditShow(item)">
-                      <v-list-item-title>View / Edit</v-list-item-title>
-                    </v-list-item>
-                  </v-list>
-                </v-menu>
-              </template>
-            </v-data-table>
-          </v-card>
-        </v-flex>
-      </v-layout>
-    </v-flex>
-  </v-layout>
+    <v-row no-gutters>
+      <v-col>
+        <v-card variant="flat">
+          <v-card-title>
+            <v-text-field
+              v-model="q"
+              append-inner-icon="mdi-magnify"
+              label="Search"
+              single-line
+              hide-details
+              clearable
+            />
+          </v-card-title>
+          <v-data-table-server
+            :headers="headers"
+            :items="items"
+            :items-length="total || 0"
+            v-model:page="page"
+            v-model:items-per-page="itemsPerPage"
+            v-model:sort-by="sortBy"
+            v-model:sort-desc="descending"
+            :loading="loading"
+            loading-text="Loading... Please wait"
+          >
+            <template #item.data-table-actions="{ item }">
+              <v-menu location="right" origin="overlap">
+                <template #activator="{ props }">
+                  <v-btn icon variant="text" v-bind="props">
+                    <v-icon>mdi-dots-vertical</v-icon>
+                  </v-btn>
+                </template>
+                <v-list>
+                  <v-list-item @click="createEditShow(item)">
+                    <v-list-item-title>View / Edit</v-list-item-title>
+                  </v-list-item>
+                </v-list>
+              </v-menu>
+            </template>
+            <template #item.discoverability="{ item }">
+              <span>{{ combine(item) }}</span>
+            </template>
+            <template #item.required="{ value }">
+              <v-checkbox-btn :model-value="value" disabled />
+            </template>
+            <template #item.exclusive="{ value }">
+              <v-checkbox-btn :model-value="value" disabled />
+            </template>
+          </v-data-table-server>
+        </v-card>
+      </v-col>
+    </v-row>
+  </v-container>
 </template>
 
 <script>
@@ -62,6 +69,15 @@ import { mapActions } from "vuex"
 
 import SettingsBreadcrumbs from "@/components/SettingsBreadcrumbs.vue"
 import NewEditSheet from "@/tag_type/NewEditSheet.vue"
+
+const attribute_to_text = {
+  discoverable_case: "Cases",
+  discoverable_incident: "Incidents",
+  discoverable_query: "Queries",
+  discoverable_signal: "Signals",
+  discoverable_source: "Sources",
+  discoverable_document: "Documents",
+}
 
 export default {
   name: "TagTypeTable",
@@ -73,9 +89,12 @@ export default {
   data() {
     return {
       headers: [
-        { text: "Name", value: "name", sortable: true },
-        { text: "Description", value: "description", sortable: false },
-        { text: "", value: "data-table-actions", sortable: false, align: "end" },
+        { title: "Name", value: "name", sortable: true },
+        { title: "Description", value: "description", sortable: false },
+        { title: "Discoverability", value: "discoverability", sortable: false },
+        { title: "Required", value: "required", sortable: false },
+        { title: "Exclusive", value: "exclusive", sortable: false },
+        { title: "", key: "data-table-actions", sortable: false, align: "end" },
       ],
     }
   },
@@ -92,11 +111,10 @@ export default {
       "table.rows.items",
       "table.rows.total",
     ]),
-    ...mapFields("route", ["query"]),
   },
 
   created() {
-    this.project = [{ name: this.query.project }]
+    this.project = [{ name: this.$route.query.project }]
 
     this.getAll()
 
@@ -119,6 +137,15 @@ export default {
 
   methods: {
     ...mapActions("tag_type", ["getAll", "createEditShow", "removeShow"]),
+    combine(item) {
+      let result = Object.keys(attribute_to_text).reduce((acc, key) => {
+        if (item[key]) {
+          acc.push(attribute_to_text[key])
+        }
+        return acc
+      }, [])
+      return result.join(", ")
+    },
   },
 }
 </script>

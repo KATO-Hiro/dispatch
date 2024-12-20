@@ -1,41 +1,51 @@
 <template>
-  <ValidationProvider name="template" immediate>
-    <v-combobox
-      v-model="template"
-      :items="items"
-      :search-input.sync="search"
-      :menu-props="{ maxHeight: '400' }"
-      item-text="name"
-      :label="label"
-      placeholder="Start typing to search"
-      return-object
-      :hint="hint"
-      :loading="loading"
-      no-filter
-    >
-      <template slot="append-outer">
-        <v-btn icon @click="createEditShow({})">
-          <v-icon>add</v-icon>
-        </v-btn>
-        <new-edit-sheet @new-document-created="addItem($event)" />
-      </template>
-    </v-combobox>
-  </ValidationProvider>
+  <v-combobox
+    v-model="template"
+    :items="items"
+    v-model:search="search"
+    :menu-props="{ maxHeight: '400' }"
+    item-title="name"
+    item-value="id"
+    :label="label"
+    placeholder="Start typing to search"
+    return-object
+    :hint="hint"
+    :loading="loading"
+    no-filter
+    name="template"
+  >
+    <template #append>
+      <v-btn icon variant="text" @click="createEditShow({ resource_type: resourceType })">
+        <v-icon>mdi-plus</v-icon>
+      </v-btn>
+    </template>
+    <template #no-data>
+      <v-list-item>
+        <v-list-item-title>
+          No results matching "<strong>{{ search }}</strong
+          >"
+        </v-list-item-title>
+      </v-list-item>
+    </template>
+    <template #append-item>
+      <v-list-item v-if="more" @click="loadMore()">
+        <v-list-item-subtitle> Load More </v-list-item-subtitle>
+      </v-list-item>
+    </template>
+  </v-combobox>
 </template>
 
 <script>
 import { mapActions } from "vuex"
 import { cloneDeep } from "lodash"
-import { ValidationProvider } from "vee-validate"
 
 import DocumentApi from "@/document/api"
-import NewEditSheet from "@/document/template/TemplateNewEditSheet.vue"
 
 export default {
   name: "TemplateSelect",
 
   props: {
-    value: {
+    modelValue: {
       type: Object,
       default: function () {
         return {}
@@ -61,23 +71,20 @@ export default {
     },
   },
 
-  components: {
-    ValidationProvider,
-    NewEditSheet,
-  },
-
   data() {
     return {
       loading: false,
       search: null,
       select: null,
       items: [],
+      more: false,
+      numItems: 5,
     }
   },
 
   watch: {
-    search(val) {
-      val && val !== this.select && this.fetchData()
+    search() {
+      this.fetchData()
     },
     value(val) {
       if (!val) return
@@ -88,10 +95,10 @@ export default {
   computed: {
     template: {
       get() {
-        return cloneDeep(this.value)
+        return cloneDeep(this.modelValue)
       },
       set(value) {
-        this.$emit("input", value)
+        this.$emit("update:modelValue", value)
       },
     },
   },
@@ -101,6 +108,10 @@ export default {
     addItem(value) {
       this.document = value
       this.items.push(value)
+    },
+    loadMore() {
+      this.numItems = this.numItems + 5
+      this.fetchData()
     },
     fetchData() {
       this.error = null
@@ -129,6 +140,22 @@ export default {
 
       DocumentApi.getAll(filterOptions).then((response) => {
         this.items = response.data.items
+
+        if (this.template) {
+          // check to see if the current selection is available in the list and if not we add it
+          if (!this.items.find((match) => match.id === this.template.id)) {
+            this.items = [this.template].concat(this.items)
+          }
+        }
+
+        this.total = response.data.total
+
+        if (this.items.length < this.total) {
+          this.more = true
+        } else {
+          this.more = false
+        }
+
         this.loading = false
       })
     },

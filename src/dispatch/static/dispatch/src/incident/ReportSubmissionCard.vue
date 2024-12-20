@@ -1,144 +1,178 @@
 <template>
-  <ValidationObserver v-slot="{ invalid, validated }">
-    <v-card class="mx-auto ma-4" max-width="600" flat outlined :loading="loading">
+  <v-form @submit.prevent="report()" v-slot="{ isValid }">
+    <v-card
+      class="mx-auto ma-4"
+      title="Report Incident"
+      max-width="600"
+      variant="outlined"
+      :loading="loading"
+    >
+      <template #append>
+        <v-tooltip location="bottom">
+          <template #activator="{ props }">
+            <v-btn icon variant="text" v-bind="props" @click="copyView">
+              <v-icon>mdi-content-copy</v-icon>
+            </v-btn>
+          </template>
+          <span>Copy current fields as template.</span>
+        </v-tooltip>
+      </template>
       <v-card-text>
-        <p class="display-1 text--primary">Report Incident</p>
-        <p>
-          If you suspect an incident and require help, please fill out the following to the best of
-          your abilities.
+        <p v-if="project?.report_incident_instructions">
+          {{ project?.report_incident_instructions }}
+        </p>
+        <p v-else>
+          If you suspect an incident and need help, please fill out this form to the best of your
+          abilities.
         </p>
         <p v-if="project_faq">
-          Unsure if your in the right place or have additional questions? Checkout this project's
-          incident FAQ document:
+          If you have additional questions, please check out the following FAQ document:
           <a :href="project_faq.weblink" target="_blank" style="text-decoration: none">
             {{ project_faq.name }}
-            <v-icon small>open_in_new</v-icon>
+            <v-icon size="small">mdi-open-in-new</v-icon>
           </a>
         </p>
-        <v-form>
-          <v-container grid-list-md>
-            <v-layout wrap>
-              <v-flex xs12>
-                <ValidationProvider name="Title" rules="required" immediate>
-                  <v-textarea
-                    v-model="title"
-                    slot-scope="{ errors, valid }"
-                    :error-messages="errors"
-                    :success="valid"
-                    label="Title"
-                    hint="A brief explanatory title. You can change this later."
-                    clearable
-                    auto-grow
-                    rows="2"
-                    required
-                  />
-                </ValidationProvider>
-              </v-flex>
-              <v-flex xs12>
-                <ValidationProvider name="Description" rules="required" immediate>
-                  <v-textarea
-                    v-model="description"
-                    slot-scope="{ errors, valid }"
-                    :error-messages="errors"
-                    :success="valid"
-                    label="Description"
-                    hint="A summary of what you know so far. It's all right if this is incomplete."
-                    clearable
-                    auto-grow
-                    rows="3"
-                    required
-                  />
-                </ValidationProvider>
-              </v-flex>
-              <v-flex xs12>
-                <project-select v-model="project" />
-              </v-flex>
-              <v-flex xs12>
-                <incident-type-select :project="project" v-model="incident_type" />
-              </v-flex>
-              <v-flex xs12>
-                <incident-priority-select :project="project" v-model="incident_priority" />
-              </v-flex>
-              <v-flex xs12>
-                <tag-filter-combobox :project="project" v-model="tags" label="Tags" />
-              </v-flex>
-              <v-flex xs12>
-                <v-checkbox v-model="trackingOnly" label="Tracking Only">
-                  <template v-slot:label>
-                    <div>
-                      Tracking Only
-                      <v-tooltip max-width="250px" bottom>
-                        <template v-slot:activator="{ on, attrs }">
-                          <v-icon v-bind="attrs" v-on="on"> help_outline </v-icon>
-                        </template>
-                        Dispatch will only create a ticket for this incident. The status of the
-                        incident will be closed and no collaboration resources will be created. No
-                        further action from you will be needed.
-                      </v-tooltip>
-                    </div>
-                  </template>
-                </v-checkbox>
-              </v-flex>
-            </v-layout>
-            <template>
-              <v-btn
-                color="info"
-                depressed
-                :loading="loading"
-                :disabled="invalid || !validated"
-                @click="report()"
-              >
-                Submit
-                <template v-slot:loader>
-                  <v-progress-linear indeterminate color="white" />
-                </template>
-              </v-btn>
-            </template>
-          </v-container>
-        </v-form>
+
+        <v-row>
+          <v-col cols="12">
+            <v-textarea
+              v-model="title"
+              label="Title"
+              :hint="
+                project?.report_incident_title_hint
+                  ? project.report_incident_title_hint
+                  : 'A brief explanatory title. You can change this later.'
+              "
+              clearable
+              auto-grow
+              rows="2"
+              required
+              name="Title"
+              :rules="[rules.required]"
+            />
+          </v-col>
+          <v-col cols="12">
+            <v-textarea
+              v-model="description"
+              label="Description"
+              :hint="
+                project?.report_incident_description_hint
+                  ? project.report_incident_description_hint
+                  : 'A summary of what you know so far. It is all right if this is incomplete.'
+              "
+              clearable
+              auto-grow
+              rows="3"
+              required
+              name="Description"
+              :rules="[rules.required]"
+            />
+          </v-col>
+          <v-col cols="12">
+            <project-select v-model="project" excludeDisabled />
+          </v-col>
+          <v-col cols="12">
+            <incident-type-select :project="project" v-model="incident_type" />
+          </v-col>
+          <v-col cols="12">
+            <incident-priority-select :project="project" v-model="incident_priority" />
+          </v-col>
+          <v-col cols="12">
+            <tag-filter-auto-complete
+              :project="project"
+              v-model="tags"
+              label="Tags"
+              model="incident"
+            />
+          </v-col>
+
+          <v-col cols="12" v-if="project?.select_commander_visibility">
+            <participant-select
+              v-model="local_commander"
+              label="Optional: Incident Commander"
+              hint="If not entered, the current on-call will be assigned."
+              clearable
+              :project="project"
+              name="Optional: Incident Commander"
+              :rules="[only_one]"
+            />
+          </v-col>
+        </v-row>
       </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+
+        <v-btn
+          color="info"
+          block
+          variant="flat"
+          :loading="loading"
+          :disabled="!isValid.value"
+          type="submit"
+        >
+          Submit
+          <template #loader>
+            <v-progress-linear indeterminate color="white" />
+          </template>
+        </v-btn>
+      </v-card-actions>
     </v-card>
-  </ValidationObserver>
+  </v-form>
 </template>
 
 <script>
-import { mapFields } from "vuex-map-fields"
-import { mapActions } from "vuex"
-import { ValidationObserver, ValidationProvider, extend } from "vee-validate"
-import { required } from "vee-validate/dist/rules"
-import IncidentTypeSelect from "@/incident_type/IncidentTypeSelect.vue"
-import IncidentPrioritySelect from "@/incident_priority/IncidentPrioritySelect.vue"
-import ProjectSelect from "@/project/ProjectSelect.vue"
-import DocumentApi from "@/document/api"
-import TagFilterCombobox from "@/tag/TagFilterCombobox.vue"
+import { required } from "@/util/form"
 
-extend("required", {
-  ...required,
-  message: "This field is required",
-})
+import { mapActions } from "vuex"
+import { mapFields } from "vuex-map-fields"
+import { isNavigationFailure, NavigationFailureType } from "vue-router"
+
+import router from "@/router"
+
+import DocumentApi from "@/document/api"
+import ProjectApi from "@/project/api"
+import AuthApi from "@/auth/api"
+import IncidentPrioritySelect from "@/incident/priority/IncidentPrioritySelect.vue"
+import IncidentTypeSelect from "@/incident/type/IncidentTypeSelect.vue"
+import ProjectSelect from "@/project/ProjectSelect.vue"
+import TagFilterAutoComplete from "@/tag/TagPicker.vue"
+import ParticipantSelect from "@/components/ParticipantSelect.vue"
 
 export default {
+  setup() {
+    return {
+      rules: { required },
+    }
+  },
   name: "ReportSubmissionCard",
 
   components: {
-    ValidationProvider,
-    ValidationObserver,
     IncidentTypeSelect,
     IncidentPrioritySelect,
     ProjectSelect,
-    TagFilterCombobox,
+    TagFilterAutoComplete,
+    ParticipantSelect,
   },
+
   data() {
     return {
       isSubmitted: false,
       project_faq: null,
+      local_commander: null,
+      only_one: (value) => {
+        if (value && value.length > 1) {
+          return "Only one is allowed"
+        }
+        return true
+      },
     }
   },
+
   computed: {
     ...mapFields("incident", [
       "selected.incident_priority",
       "selected.incident_type",
-      "selected.commander",
+      "selected.commander_email",
       "selected.title",
       "selected.tags",
       "selected.description",
@@ -150,51 +184,131 @@ export default {
       "selected.loading",
       "selected.ticket",
       "selected.project",
-      "selected.trackingOnly",
       "selected.id",
+      "default_project",
     ]),
-    ...mapFields("route", ["query"]),
+    ...mapFields("auth", ["currentUser.projects"]),
   },
 
   methods: {
     getFAQ() {
-      DocumentApi.getAll({
-        filter: JSON.stringify({
-          and: [
+      if (this.project) {
+        DocumentApi.getAll({
+          filter: JSON.stringify({
+            and: [
+              {
+                field: "resource_type",
+                op: "==",
+                value: "dispatch-faq-reference-document",
+              },
+              {
+                model: "Project",
+                field: "name",
+                op: "==",
+                value: this.project.name,
+              },
+            ],
+          }),
+        }).then((response) => {
+          if (response.data.items.length) {
+            this.project_faq = response.data.items[0]
+          }
+        })
+      }
+    },
+    copyView: function () {
+      let store = this.$store
+      navigator.clipboard.writeText(window.location).then(
+        function () {
+          store.commit(
+            "notification_backend/addBeNotification",
             {
-              field: "resource_type",
-              op: "==",
-              value: "dispatch-faq-reference-document",
+              text: "View copied to clipboard.",
             },
+            { root: true }
+          )
+        },
+        function () {
+          store.commit(
+            "notification_backend/addBeNotification",
             {
-              model: "Project",
-              field: "name",
-              op: "==",
-              value: this.project.name,
+              text: "Failed to copy view to clipboard.",
+              color: "red",
             },
-          ],
-        }),
-      }).then((response) => {
-        if (response.data.items.length) {
-          this.project_faq = response.data.items[0]
+            { root: true }
+          )
         }
-      })
+      )
     },
     ...mapActions("incident", ["report", "get", "resetSelected"]),
   },
 
   created() {
-    if (this.query.project) {
-      this.project = { name: this.query.project }
+    if (this.$route.query.project) {
+      let params = {
+        filter: { field: "name", op: "==", value: this.$route.query.project },
+      }
+      // get full project object from api
+      ProjectApi.getAll(params).then((response) => {
+        if (response.data.items.length && !this.project) {
+          this.project = response.data.items[0]
+        }
+      })
+    } else if (this.projects.length && !this.project) {
+      this.project = this.projects[0].project
+    } else {
+      // if no user projects stored yet, get the default project for the user
+      // if no default user project, then get the default project for the organization
+      AuthApi.getUserInfo().then((response) => {
+        if (this.project) {
+          // if the user has already selected something, exit
+          return
+        }
+        let default_user_project = response.data.projects.filter((v) => v.default === true)
+        if (default_user_project.length) {
+          this.project = default_user_project[0].project
+        } else if (this.default_project) {
+          this.project = this.default_project
+        } else {
+          let default_params = {
+            filter: { field: "default", op: "==", value: true },
+          }
+          ProjectApi.getAll(default_params).then((response) => {
+            if (response.data.items.length && !this.project) {
+              this.project = response.data.items[0]
+            }
+          })
+        }
+      })
     }
 
-    if (this.query.incident_type) {
-      this.incident_type = { name: this.query.incident_type }
+    if (this.$route.query.incident_type) {
+      this.incident_type = { name: this.$route.query.incident_type }
     }
 
-    if (this.query.incident_priority) {
-      this.incident_priority = { name: this.query.incident_priority }
+    if (this.$route.query.incident_priority) {
+      this.incident_priority = { name: this.$route.query.incident_priority }
     }
+
+    if (this.$route.query.title) {
+      this.title = this.$route.query.title
+    }
+
+    if (this.$route.query.description) {
+      this.description = this.$route.query.description
+    }
+
+    if (this.$route.query.tag) {
+      if (Array.isArray(this.$route.query.tag)) {
+        this.tags = this.$route.query.tag.map(function (t) {
+          return { name: t }
+        })
+      } else {
+        this.tags = [{ name: this.$route.query.tag }]
+      }
+    }
+
+    this.getFAQ()
 
     this.$watch(
       (vm) => [vm.project],
@@ -203,15 +317,45 @@ export default {
       }
     )
 
-    if (this.query.tag) {
-      if (Array.isArray(this.query.tag)) {
-        this.tags = this.query.tag.map(function (t) {
-          return { name: t }
-        })
-      } else {
-        this.tags = [{ name: this.query.tag }]
+    this.$watch(
+      (vm) => [
+        vm.project,
+        vm.incident_priority,
+        vm.incident_type,
+        vm.title,
+        vm.description,
+        vm.local_commander,
+        vm.tags,
+      ],
+      () => {
+        if (Array.isArray(this.local_commander))
+          this.commander_email = this.local_commander[0].individual.email
+        var queryParams = {
+          project: this.project ? this.project.name : null,
+          incident_priority: this.incident_priority ? this.incident_priority.name : null,
+          incident_type: this.incident_type ? this.incident_type.name : null,
+          title: this.title,
+          description: this.description,
+          tag: this.tags ? this.tags.map((tag) => tag.name) : null,
+          commander_email: this.commander_email,
+        }
+        Object.keys(queryParams).forEach((key) => (queryParams[key] ? {} : delete queryParams[key]))
+        router
+          .replace({
+            query: queryParams,
+          })
+          .catch((err) => {
+            // Updating the query fields also updates the URL.
+            // Frequent updates to these fields throws navigation cancelled failures.
+            if (isNavigationFailure(err, NavigationFailureType.cancelled)) {
+              // resolve error
+              return err
+            }
+            // rethrow error
+            return Promise.reject(err)
+          })
       }
-    }
+    )
   },
 }
 </script>

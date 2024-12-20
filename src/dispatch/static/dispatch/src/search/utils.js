@@ -26,16 +26,23 @@ export default {
   mapTableOptionsToQueryParams(options, queryParams) {
     return options, queryParams
   },
-  createParametersFromTableOptions(options, rawFilters) {
-    let expression = this.createFilterExpression(options.filters)
+  createParametersFromTableOptions(options, model, rawFilters) {
+    let [sortBy, descending] = this.createSortExpression(options.sortBy, options.descending)
+    let expression = this.createFilterExpression(options.filters, model)
     delete options.filters
+    delete options.sortBy
 
     if (!expression.length) {
       if (rawFilters != null && typeof rawFilters[Symbol.iterator] === "function") {
         expression = { and: [...rawFilters] }
-        return { ...options, filter: JSON.stringify(expression) }
+        return {
+          ...options,
+          sortBy: sortBy,
+          descending: descending,
+          filter: JSON.stringify(expression),
+        }
       } else {
-        return options
+        return { ...options, sortBy: sortBy, descending: descending }
       }
     }
 
@@ -45,9 +52,72 @@ export default {
       expression = { and: expression }
     }
 
-    return { ...options, filter: JSON.stringify(expression) }
+    return {
+      ...options,
+      sortBy: sortBy,
+      descending: descending,
+      filter: JSON.stringify(expression),
+    }
   },
-  createFilterExpression(filters) {
+  createSortExpression(sortBy, sortDesc) {
+    let descending = []
+    each(sortBy, function (sortField, index) {
+      descending.push(sortDesc && sortDesc[index] ? true : false)
+    })
+    return [sortBy, descending]
+  },
+  /**
+   * Create a filter expression for searching for items in a database
+   *
+   * @param {Object} filters - An object containing the search filters
+   * @param {String} model - The name of the model used in the search
+   *
+   * @return {Array} filterExpression - An array of filter objects that can be used to search the database
+   *
+   * @example
+   * const filters = {
+   *   name: "Endpoint infected with Nanocore",
+   *   start_date: {
+   *     start: "2022-01-01",
+   *     end: "2022-12-31"
+   *   }
+   * }
+   * const model = "Case"
+   *
+   * const filterExpression = createFilterExpression(filters, model)
+   * console.log(filterExpression)
+   *
+   * // Output:
+   * // [
+   * //   {
+   * //     or: [
+   * //       {
+   * //         model: "Case",
+   * //         field: "name",
+   * //         op: "==",
+   * //         value: "Endpoint infected with Nanocore"
+   * //       }
+   * //     ]
+   * //   },
+   * //   {
+   * //     and: [
+   * //       {
+   * //         model: "Case",
+   * //         field: "start_date",
+   * //         op: ">=",
+   * //         value: "2022-01-01"
+   * //       },
+   * //       {
+   * //         model: "Case",
+   * //         field: "start_date",
+   * //         op: "<=",
+   * //         value: "2022-12-31"
+   * //       }
+   * //     ]
+   * //   }
+   * // ]
+   */
+  createFilterExpression(filters, model) {
     let filterExpression = []
     forEach(filters, function (value, key) {
       let subFilter = []
@@ -56,8 +126,8 @@ export default {
         if (value.start) {
           subFilter.push({
             and: [
-              { model: "Incident", field: key, op: ">=", value: value.start },
-              { model: "Incident", field: key, op: "<=", value: value.end },
+              { model: model, field: key, op: ">=", value: value.start },
+              { model: model, field: key, op: "<=", value: value.end },
             ],
           })
         }
@@ -67,7 +137,21 @@ export default {
           if (!value) {
             return
           }
-          if (has(value, "id")) {
+          if (["commander", "participant", "assignee"].includes(key) && has(value, "email")) {
+            subFilter.push({
+              model: toPascalCase(key),
+              field: "email",
+              op: "==",
+              value: value.email,
+            })
+          } else if (["commander", "participant", "assignee"].includes(key)) {
+            subFilter.push({
+              model: toPascalCase(key),
+              field: "email",
+              op: "==",
+              value: value.individual.email,
+            })
+          } else if (has(value, "id")) {
             subFilter.push({
               model: toPascalCase(key),
               field: "id",
@@ -92,13 +176,17 @@ export default {
               })
             }
           } else {
-            // TODO support other models
-            subFilter.push({ model: "Incident", field: key, op: "==", value: value })
+            subFilter.push({ model: model, field: key, op: "==", value: value })
           }
         })
       }
       if (subFilter.length > 0) {
-        filterExpression.push({ or: subFilter })
+        if (key == "visibility") {
+          // use "and" condition to filter with visibility
+          filterExpression.push({ and: subFilter })
+        } else {
+          filterExpression.push({ or: subFilter })
+        }
       }
     })
 

@@ -16,7 +16,7 @@ export default {
   name: "TaskIncidentPriorityBarChartCard",
 
   props: {
-    value: {
+    modelValue: {
       type: Object,
       default: function () {
         return {}
@@ -47,6 +47,9 @@ export default {
           type: "bar",
           height: 350,
           stacked: true,
+          animations: {
+            enabled: false,
+          },
           toolbar: {
             show: false,
           },
@@ -77,7 +80,7 @@ export default {
     },
     series() {
       let aggCount = {}
-      forEach(this.value, function (value) {
+      forEach(this.modelValue, function (value) {
         let count = countBy(value, function (item) {
           return item.incident.incident_priority.name
         })
@@ -102,7 +105,7 @@ export default {
       return series
     },
     categoryData() {
-      return Object.keys(this.value)
+      return Object.keys(this.modelValue)
     },
   },
 }

@@ -5,20 +5,21 @@
     :license: Apache, see LICENSE for more details.
 .. moduleauthor:: Kevin Glisson <kglisson@netflix.com>
 """
+
 import functools
 import io
 import json
 import logging
 from typing import Any, List
-
 from datetime import datetime, timedelta, timezone
 
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
+from http import HTTPStatus
+from ssl import SSLError
 from tenacity import TryAgain, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from dispatch.enums import DispatchEnum
-
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class UserTypes(DispatchEnum):
 
 
 class Roles(DispatchEnum):
+    # NOTE: https://developers.google.com/drive/api/guides/ref-roles
     owner = "owner"
     organizer = "organizer"
     file_organizer = "fileOrganizer"
@@ -81,26 +83,35 @@ def paginated(data_key):
     return decorator
 
 
-# google sometimes has transient errors
 @retry(
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type(TryAgain),
     wait=wait_exponential(multiplier=1, min=2, max=5),
 )
 def make_call(client: Any, func: Any, propagate_errors: bool = False, **kwargs):
-    """Make an Google client api call."""
+    """Makes a Google API call."""
     try:
         return getattr(client, func)(**kwargs).execute()
     except HttpError as e:
-        if e.resp.status in [300, 429, 500, 502, 503, 504]:
-            log.debug("Google encountered an error retrying...")
-            raise TryAgain
+        if e.resp.status in [
+            HTTPStatus.MULTIPLE_CHOICES,
+            HTTPStatus.TOO_MANY_REQUESTS,
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            HTTPStatus.BAD_GATEWAY,
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            HTTPStatus.GATEWAY_TIMEOUT,
+        ]:
+            log.debug("We encountered an HTTP error. Retrying...")
+            raise TryAgain from None
 
         if propagate_errors:
-            raise HttpError
+            raise HttpError from None
 
-        errors = json.loads(e.content.decode())
-        raise Exception(f"Request failed. Errors: {errors}")
+        error = json.loads(e.content.decode())
+        raise Exception(f"Google request failed. Error: {error}") from None
+    except SSLError as e:
+        log.debug("We encountered an SSL error. Error: {e}")
+        raise Exception(f"Google request failed. Error: {e}") from None
 
 
 @retry(wait=wait_exponential(multiplier=1, max=10))
@@ -109,8 +120,13 @@ def upload_chunk(request: Any):
     try:
         return request.next_chunk()
     except HttpError as e:
-        if e.resp.status in [500, 502, 503, 504]:
-            # Call next_chunk() agai, but use an exponential backoff for repeated errors.
+        if e.resp.status in [
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            HTTPStatus.BAD_GATEWAY,
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            HTTPStatus.GATEWAY_TIMEOUT,
+        ]:
+            # Call next_chunk() again, but use an exponential backoff for repeated errors.
             raise e
 
 
@@ -154,8 +170,8 @@ def download_google_document(client: Any, file_id: str, mime_type: str = "text/p
             _, response = downloader.next_chunk()
         return fp.getvalue().decode("utf-8")
     except (HttpError, OSError):
-        # Do no retry. Log the error fail.
-        raise Exception(f"Failed to export the file. Id: {file_id} MimeType: {mime_type}")
+        # Do no retry and raise exception
+        raise Exception(f"Failed to export the file. Id: {file_id} MimeType: {mime_type}") from None
 
 
 def create_file(
@@ -167,8 +183,11 @@ def create_file(
     file_type: str = "folder",
 ):
     """Creates a new folder with the specified parents."""
-    mimetype = "application/vnd.google-apps.document"
-    if file_type == "folder":
+    if file_type == "document":
+        mimetype = "application/vnd.google-apps.document"
+    elif file_type == "sheet":
+        mimetype = "application/vnd.google-apps.spreadsheet"
+    elif file_type == "folder":
         mimetype = "application/vnd.google-apps.folder"
 
     file_metadata = {"name": name, "mimeType": mimetype, "parents": [parent_id]}
@@ -181,8 +200,9 @@ def create_file(
         supportsAllDrives=True,
     )
 
-    for member in members:
-        add_permission(client, member, file_data["id"], role, "user")
+    if members:
+        for member in members:
+            add_permission(client, member, file_data["id"], role, "user")
 
     return file_data
 
@@ -255,9 +275,21 @@ def copy_file(client: Any, folder_id: str, file_id: str, new_file_name: str):
     )
 
 
-def delete_file(client: Any, folder_id: str, file_id: str):
-    """Deletes a file from a teamdrive."""
-    return make_call(client.files(), "delete", fileId=file_id, supportsAllDrives=True)
+def delete_file(client: Any, file_id: str):
+    """Moves a folder or file to Trash in a Google Drive."""
+    property = {"trashed": True}
+    return make_call(
+        client.files(), "update", fileId=file_id, supportsAllDrives=True, body=property
+    )
+
+
+def mark_as_readonly(
+    client: Any,
+    file_id: str,
+):
+    """Adds the 'copyRequiresWriterPermission' capability to the given file."""
+    capability = {"copyRequiresWriterPermission": True}
+    return make_call(client.files(), "update", fileId=file_id, body=capability)
 
 
 def add_domain_permission(
@@ -267,7 +299,7 @@ def add_domain_permission(
     role: Roles = Roles.commenter,
     user_type: UserTypes = UserTypes.domain,
 ):
-    """Adds a domain permission to team drive or file."""
+    """Adds a domain permission to a team drive or file."""
     permission = {"type": user_type, "role": role, "domain": domain}
     return make_call(
         client.permissions(),
@@ -287,7 +319,7 @@ def add_permission(
     role: Roles = Roles.owner,
     user_type: UserTypes = UserTypes.user,
 ):
-    """Adds a permission to team drive"""
+    """Adds a permission to a team drive or file."""
     permission = {"type": user_type, "role": role, "emailAddress": email}
     return make_call(
         client.permissions(),
@@ -300,12 +332,12 @@ def add_permission(
     )
 
 
-def remove_permission(client: Any, email: str, folder_id: str):
-    """Removes permission from team drive or file."""
+def remove_permission(client: Any, email: str, team_drive_or_file_id: str):
+    """Removes permission from a team drive or file."""
     permissions = make_call(
         client.permissions(),
         "list",
-        fileId=folder_id,
+        fileId=team_drive_or_file_id,
         fields="permissions(id, emailAddress)",
         supportsAllDrives=True,
     )
@@ -315,14 +347,14 @@ def remove_permission(client: Any, email: str, folder_id: str):
             make_call(
                 client.permissions(),
                 "delete",
-                fileId=folder_id,
+                fileId=team_drive_or_file_id,
                 permissionId=p["id"],
                 supportsAllDrives=True,
             )
 
 
 def move_file(client: Any, folder_id: str, file_id: str):
-    """Moves a file from one team drive to another"""
+    """Moves a file from one team drive to another."""
     f = make_call(client.files(), "get", fileId=file_id, fields="parents", supportsAllDrives=True)
 
     previous_parents = ",".join(f.get("parents"))
